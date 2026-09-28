@@ -81,6 +81,17 @@ Memory does not survive session restarts. Files do.
 - Make a mistake -> document it so future-you does not repeat it.
 - On-disk text files are always better than holding it in temporary context.
 
+## Company Memory Tools (Copilot Memory plugin)
+
+When the `memory_*` tools are available, use them for anything the team or other agents should remember:
+
+- `memory_search` -- recall decisions, people, preferences, and commitments (hybrid semantic + keyword).
+- `memory_note` -- log to today's daily notes; `scope: "company"` for things the whole team should see.
+- `memory_write` -- curate `MEMORY.md` (read it first with `memory_get`).
+- `memory_forget` -- remove facts that are no longer true.
+
+Company and agent `MEMORY.md` plus recent daily notes are already injected at the start of each run. Keep using the files under `$AGENT_HOME` for your private PARA knowledge graph.
+
 ## Memory Recall -- Use qmd
 
 Use `qmd` rather than grepping files:

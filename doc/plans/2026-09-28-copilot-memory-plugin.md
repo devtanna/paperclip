@@ -128,10 +128,10 @@ The work is **plugin-first**, to keep the fork easy to rebase on upstream: a new
 
 ## Phase 1: Memory engine (OpenClaw memory model)
 
-**Files are the source of truth.** They live in a plugin local folder, `memory-root`, declared through `ctx.localFolders` the same way llm-wiki declares `wiki-root`. They are included in backups and can be edited in the UI.
+**Implementation note (2026-09-28):** the markdown documents are stored in the plugin's Postgres namespace (`memory_documents`, with revisions), not in a local folder. Plugin local folders need an absolute path configured per company, which fits a hosted multi-user server poorly. Postgres gets backed up by `pg_dump`, needs no setup, and works with remote runners. The file layout below is unchanged; it is the document path within each scope.
 
 ```
-memory-root/<companyId>/
+<company>/  (scope → path)
   company/MEMORY.md             # shared curated long-term facts (evergreen)
   company/memory/YYYY-MM-DD.md  # company daily log (decays)
   company/DREAMS.md
