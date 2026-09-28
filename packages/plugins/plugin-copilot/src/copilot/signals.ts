@@ -62,9 +62,10 @@ export async function recordSignalFromEvent(ctx: PluginContext, event: PluginEve
     // Comment events carry the issue as the event entity.
     const issueId = payload.issueId ?? (event.entityType === "issue" ? event.entityId ?? null : null);
     const issue = issueId ? await ctx.issues.get(issueId, event.companyId).catch(() => null) : null;
-    // Chats with the Copilot already wake it directly.
-    if (issue?.conversationAgentId && issue.conversationAgentId === settings.agentId) return false;
-    const ref = issue ? `${issue.identifier ?? "task"} "${issue.title}"` : payload.identifier ?? "a task";
+    // Agent Chat conversations are private to that person and agent (chats
+    // with the Copilot already wake it directly), so they never feed the pulse.
+    if (!issue || issue.conversationAgentId) return false;
+    const ref = `${issue.identifier ?? "task"} "${issue.title}"`;
     await addSignal(ctx.db, {
       companyId: event.companyId,
       kind: "human_comment",

@@ -22,6 +22,8 @@ import {
   saveSettings,
 } from "../../../packages/plugins/plugin-copilot/src/copilot/store.js";
 import { normalizeSchedule } from "../../../packages/plugins/plugin-copilot/src/copilot/schedules.js";
+import { recordSignalFromEvent } from "../../../packages/plugins/plugin-copilot/src/copilot/signals.js";
+import { pendingSignals } from "../../../packages/plugins/plugin-copilot/src/copilot/store.js";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -211,6 +213,31 @@ describeEmbeddedPostgres("copilot engine (real Postgres)", () => {
     state.agentStatus = "running";
     expect((await evaluatePulse(ctx(), settings, now)).outcome).toBe("copilot_busy");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("turns people's task comments and failed runs into signals, but never private chats or the Copilot's own actions", async () => {
+    await onAllDay();
+    const issues: Record<string, Record<string, unknown>> = {
+      task: { id: "task", identifier: "ENG-1", title: "Ship", priority: "high", conversationAgentId: null },
+      dm: { id: "dm", identifier: "ENG-2", title: "Chat with Eng", priority: "medium", conversationAgentId: "agent-eng" },
+    };
+    const c = ctx();
+    c.issues.get = vi.fn(async (id: string) => issues[id] ?? null);
+    const event = (overrides: Record<string, unknown>) =>
+      ({ eventId: randomUUID(), occurredAt: new Date().toISOString(), companyId, ...overrides }) as any;
+
+    expect(await recordSignalFromEvent(c, event({ eventType: "issue.comment.created", actorType: "user", actorId: "alice", entityType: "issue", entityId: "task", payload: { bodySnippet: "can we ship friday?" } }))).toBe(true);
+    expect(await recordSignalFromEvent(c, event({ eventType: "issue.comment.created", actorType: "user", actorId: "alice", entityType: "issue", entityId: "dm", payload: { bodySnippet: "private" } }))).toBe(false);
+    expect(await recordSignalFromEvent(c, event({ eventType: "issue.comment.created", actorType: "agent", actorId: "agent-eng", entityType: "issue", entityId: "task", payload: {} }))).toBe(false);
+    expect(await recordSignalFromEvent(c, event({ eventType: "agent.run.failed", actorType: "agent", actorId: COPILOT_ID, payload: { agentId: COPILOT_ID } }))).toBe(false);
+    expect(await recordSignalFromEvent(c, event({ eventType: "agent.run.failed", actorType: "system", payload: { agentId: "agent-eng", issueId: "task", error: "boom" } }))).toBe(true);
+
+    const signals = await pendingSignals(pluginDb, companyId);
+    expect(signals.map((signal) => [signal.kind, signal.urgent])).toEqual([
+      ["human_comment", false],
+      ["run_failed", true],
+    ]);
+    expect(signals.some((signal) => signal.summary.includes("private"))).toBe(false);
   });
 
   it("reports pulse data sources that fail instead of silently dropping them", async () => {
