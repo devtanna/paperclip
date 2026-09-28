@@ -1344,6 +1344,15 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     MAX_TURN_CONTINUATION_MAX_DELAY_SEC,
   );
 
+  const activeHours = asObject(effectiveHeartbeat.activeHours) as Record<string, string | undefined>;
+
+  /** Empty start and end clears the window (always active). */
+  function updateActiveHours(patch: Record<string, string>) {
+    const next = { ...activeHours, ...patch };
+    const cleared = !next.start && !next.end;
+    mark("heartbeat", "activeHours", cleared ? undefined : next);
+  }
+
   function updateMaxTurnContinuation(patch: Record<string, unknown>) {
     mark("heartbeat", "maxTurnContinuation", {
       ...maxTurnContinuation,
@@ -2043,6 +2052,41 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   className={inputClass}
                 />
               </Field>
+              <Field label="Heartbeat active hours" hint={help.heartbeatActiveHours}>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {(["start", "end"] as const).map((edge) => (
+                    <DraftInput
+                      key={edge}
+                      value={String(activeHours[edge] ?? "")}
+                      onCommit={(v) => updateActiveHours({ [edge]: v.trim() })}
+                      placeholder={edge === "start" ? "08:00" : "22:00"}
+                      aria-label={`Active hours ${edge}`}
+                      className={inputClass}
+                    />
+                  ))}
+                  <DraftInput
+                    value={String(activeHours.timezone ?? "")}
+                    onCommit={(v) => updateActiveHours({ timezone: v.trim() })}
+                    placeholder="UTC"
+                    aria-label="Active hours timezone"
+                    className={inputClass}
+                  />
+                </div>
+              </Field>
+              <Field label="Heartbeat model" hint={help.heartbeatModel}>
+                <DraftInput
+                  value={String(eff("heartbeat", "model", heartbeat.model ?? ""))}
+                  onCommit={(v) => mark("heartbeat", "model", v.trim() || undefined)}
+                  placeholder="Same as adapter"
+                  className={inputClass}
+                />
+              </Field>
+              <ToggleField
+                label="Save memory before compaction"
+                hint={help.memoryFlush}
+                checked={eff("heartbeat", "memoryFlush", heartbeat.memoryFlush === true)}
+                onChange={(v) => mark("heartbeat", "memoryFlush", v)}
+              />
               <Field label="Max concurrent runs" hint={help.maxConcurrentRuns}>
                 <DraftNumberInput
                   value={eff(

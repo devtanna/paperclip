@@ -2207,6 +2207,16 @@ export function renderPaperclipPluginContext(
   return markdown ? `# Context from plugins\n\n${markdown}` : "";
 }
 
+// Set by the server on the last run of a session that is about to be
+// compacted (runtimeConfig.memoryFlush.enabled), so the agent writes durable
+// memory before its history is dropped.
+export function renderPaperclipMemoryFlushNote(
+  context: Record<string, unknown> | null | undefined,
+): string {
+  const note = asString(context?.paperclipMemoryFlushNote, "").trim();
+  return note ? `# Save memory before this session is compacted\n\n${note}` : "";
+}
+
 // Runtime-only connector skills are supplied by the server after assignment resolution.
 // Shared-home adapters consume them here on fresh and resumed runs without installing
 // files into a user-wide skills directory. They are not part of serialized wake data.

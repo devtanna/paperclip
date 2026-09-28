@@ -1948,6 +1948,35 @@ export function buildHostServices(
         });
         return issue;
       },
+      async ensureConversation(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const agent = requireInCompany("Agent", await agents.getById(params.agentId), companyId);
+        const membership = await access.getMembership(companyId, "user", params.userId);
+        if (!membership || membership.status !== "active") {
+          throw new Error("User is not an active member of this company");
+        }
+        const existing = await issues.getConversation(companyId, agent.id, params.userId);
+        if (existing) return existing as Issue;
+        // Mirrors the board chat route, which opens a chat on first send.
+        const issue = (await issues.create(companyId, {
+          title: `Chat with ${agent.name}`,
+          assigneeAgentId: agent.id,
+          conversationAgentId: agent.id,
+          conversationUserId: params.userId,
+          conversationState: "waiting",
+          status: "in_review",
+          createdByUserId: params.userId,
+        } as any)) as Issue;
+        await logPluginActivity({
+          companyId,
+          action: "issue.conversation_opened",
+          entityType: "issue",
+          entityId: issue.id,
+          details: { agentId: agent.id, userId: params.userId },
+        });
+        return issue;
+      },
       async update(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);

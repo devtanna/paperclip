@@ -1636,6 +1636,31 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         if (input.blockedByIssueIds) blockedByIssueIds.set(record.id, [...new Set(input.blockedByIssueIds)]);
         return record;
       },
+      async ensureConversation(input) {
+        requireCapability(manifest, capabilitySet, "issues.create");
+        const existing = [...issues.values()].find(
+          (issue) =>
+            issue.companyId === input.companyId &&
+            issue.conversationAgentId === input.agentId &&
+            issue.conversationUserId === input.userId,
+        );
+        if (existing) return existing;
+        const created = await this.create({
+          companyId: input.companyId,
+          title: "Chat",
+          status: "in_review",
+          assigneeAgentId: input.agentId,
+        });
+        const conversation: Issue = {
+          ...created,
+          conversationAgentId: input.agentId,
+          conversationUserId: input.userId,
+          conversationState: "waiting",
+          createdByUserId: input.userId,
+        };
+        issues.set(conversation.id, conversation);
+        return conversation;
+      },
       async update(issueId, patch, companyId) {
         requireCapability(manifest, capabilitySet, "issues.update");
         const record = issues.get(issueId);

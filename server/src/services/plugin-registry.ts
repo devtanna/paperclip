@@ -8,6 +8,7 @@ import {
   pluginJobs,
   pluginJobRuns,
   pluginWebhookDeliveries,
+  pluginDatabaseNamespaces,
 } from "@paperclipai/db";
 import type {
   PaperclipPluginManifestV1,
@@ -60,6 +61,9 @@ function isPluginKeyConflict(error: unknown): boolean {
  *
  * @see PLUGIN_SPEC.md §21.3 — Required Tables
  */
+/** Namespaces are always `plugin_<slug>_<hash>`; see derivePluginDatabaseNamespace. */
+const PLUGIN_NAMESPACE_RE = /^plugin_[a-z0-9_]{1,56}$/;
+
 export function pluginRegistryService(db: Db) {
   // -----------------------------------------------------------------------
   // Internal helpers
@@ -265,12 +269,27 @@ export function pluginRegistryService(db: Db) {
       if (!plugin) throw notFound("Plugin not found");
 
       if (removeData) {
-        // Hard delete – plugin_config cascades via FK onDelete
-        return db
-          .delete(plugins)
-          .where(eq(plugins.id, id))
-          .returning()
-          .then((rows) => rows[0] ?? null);
+        // Hard delete. plugin_config and the namespace/migration ledgers
+        // cascade via FK, but the plugin's own Postgres schema does not, so
+        // drop it in the same transaction to leave no plugin data behind.
+        return db.transaction(async (tx) => {
+          const namespaces = await tx
+            .select({ namespaceName: pluginDatabaseNamespaces.namespaceName })
+            .from(pluginDatabaseNamespaces)
+            .where(eq(pluginDatabaseNamespaces.pluginId, id));
+          for (const { namespaceName } of namespaces) {
+            // Only ever drop host-derived plugin namespaces.
+            if (!PLUGIN_NAMESPACE_RE.test(namespaceName)) {
+              throw new Error(`Refusing to drop unexpected plugin namespace: ${namespaceName}`);
+            }
+            await tx.execute(sql.raw(`DROP SCHEMA IF EXISTS "${namespaceName}" CASCADE`));
+          }
+          return tx
+            .delete(plugins)
+            .where(eq(plugins.id, id))
+            .returning()
+            .then((rows) => rows[0] ?? null);
+        });
       }
 
       // Soft delete – mark as uninstalled

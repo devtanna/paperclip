@@ -43,6 +43,7 @@ import {
   isPaperclipRuntimeEnvKey,
   refreshPaperclipWorkspaceEnvForExecution,
   renderTemplate,
+  renderPaperclipMemoryFlushNote,
   renderPaperclipPluginContext,
   renderPaperclipWakePrompt,
   isPaperclipRecoveryWakePayload,
@@ -856,9 +857,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const pluginContextNote = renderPaperclipPluginContext(context);
+  const memoryFlushNote = renderPaperclipMemoryFlushNote(context);
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     wakePrompt,
+    memoryFlushNote,
     pluginContextNote,
     sessionHandoffNote,
     taskContextNote,
@@ -869,6 +872,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
     pluginContextChars: pluginContextNote.length,
+    memoryFlushChars: memoryFlushNote.length,
     sessionHandoffChars: sessionHandoffNote.length,
     taskContextChars: taskContextNote.length,
     heartbeatPromptChars: renderedPrompt.length,

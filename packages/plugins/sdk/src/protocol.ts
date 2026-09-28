@@ -1873,6 +1873,14 @@ export interface WorkerToHostMethods {
     params: { issueId: string; companyId: string },
     result: Issue | null,
   ];
+  "issues.ensureConversation": [
+    params: {
+      companyId: string;
+      agentId: string;
+      userId: string;
+    },
+    result: Issue,
+  ];
   "issues.create": [
     params: {
       companyId: string;

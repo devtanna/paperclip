@@ -1433,6 +1433,14 @@ export interface PluginIssuesClient {
     offset?: number;
   }): Promise<Issue[]>;
   get(issueId: string, companyId: string): Promise<Issue | null>;
+  /**
+   * Return the Agent Chat conversation between an agent and a company member,
+   * opening it the same way the board chat page does when none exists yet.
+   * Comments the plugin posts there (with `authorAgentId`) reach that person's
+   * chat and inbox. The host verifies the agent is in the company and the user
+   * is an active human member. Requires `issues.create`.
+   */
+  ensureConversation(input: { companyId: string; agentId: string; userId: string }): Promise<Issue>;
   create(input: {
     companyId: string;
     projectId?: string;

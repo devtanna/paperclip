@@ -234,6 +234,7 @@ export interface HostServices {
     list(params: WorkerToHostMethods["issues.list"][0]): Promise<WorkerToHostMethods["issues.list"][1]>;
     get(params: WorkerToHostMethods["issues.get"][0]): Promise<WorkerToHostMethods["issues.get"][1]>;
     create(params: WorkerToHostMethods["issues.create"][0]): Promise<WorkerToHostMethods["issues.create"][1]>;
+    ensureConversation(params: WorkerToHostMethods["issues.ensureConversation"][0]): Promise<WorkerToHostMethods["issues.ensureConversation"][1]>;
     update(params: WorkerToHostMethods["issues.update"][0]): Promise<WorkerToHostMethods["issues.update"][1]>;
     getRelations(params: WorkerToHostMethods["issues.relations.get"][0]): Promise<WorkerToHostMethods["issues.relations.get"][1]>;
     setBlockedBy(params: WorkerToHostMethods["issues.relations.setBlockedBy"][0]): Promise<WorkerToHostMethods["issues.relations.setBlockedBy"][1]>;
@@ -455,6 +456,7 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "issues.list": "issues.read",
   "issues.get": "issues.read",
   "issues.create": "issues.create",
+  "issues.ensureConversation": "issues.create",
   "issues.update": "issues.update",
   "issues.relations.get": "issue.relations.read",
   "issues.relations.setBlockedBy": "issue.relations.write",
@@ -884,6 +886,9 @@ export function createHostClientHandlers(
     }),
     "issues.create": gated("issues.create", async (params) => {
       return services.issues.create(params);
+    }),
+    "issues.ensureConversation": gated("issues.ensureConversation", async (params) => {
+      return services.issues.ensureConversation(params);
     }),
     "issues.update": gated("issues.update", async (params) => {
       return services.issues.update(params);

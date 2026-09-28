@@ -664,6 +664,11 @@ const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
 const ACCEPTED_PLAN_CONVERSION_SKILL_KEY =
   "paperclipai/paperclip/paperclip-converting-plans-to-tasks";
 const PAPERCLIP_AGENT_MESSAGE_KEY = "paperclipAgentMessage";
+const MEMORY_FLUSH_NOTE =
+  "This session is about to be compacted: its history will not carry into your next run. " +
+  "Before continuing, save anything durable from this session with your memory tools " +
+  "(memory_note for events and outcomes, memory_write to curate MEMORY.md). " +
+  "If there is nothing worth keeping, just continue.";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const PAPERCLIP_EXTERNAL_CHAT_EXECUTION_BOUND_KEY =
   "paperclipExternalChatExecutionBound";
@@ -11985,6 +11990,24 @@ export function heartbeatService(
     };
   }
 
+  function isMemoryFlushEnabled(agent: typeof agents.$inferSelect) {
+    return parseObject(parseObject(agent.runtimeConfig).heartbeat).memoryFlush === true;
+  }
+
+  async function wasMemoryFlushRequested(agentId: string, sessionId: string) {
+    const rows = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'paperclipMemoryFlushSessionId' = ${sessionId}`,
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async function evaluateSessionCompaction(input: {
     agent: typeof agents.$inferSelect;
     sessionId: string | null;
@@ -22623,18 +22646,57 @@ export function heartbeatService(
         stripPaperclipSessionMetadataFromSessionParams(runtimeSessionParams),
       );
 
-      const sessionCompaction = await evaluateSessionCompaction({
+      const compactingSessionId =
+        previousSessionDisplayId ?? runtimeSessionIdForAdapter;
+      let sessionCompaction = await evaluateSessionCompaction({
         agent,
-        sessionId: previousSessionDisplayId ?? runtimeSessionIdForAdapter,
+        sessionId: compactingSessionId,
         issueId,
         continuationSummaryBody: continuationSummary?.body ?? null,
       });
+      delete context.paperclipMemoryFlushNote;
+      delete context.paperclipMemoryFlushSessionId;
+      if (
+        sessionCompaction.rotate &&
+        compactingSessionId &&
+        isMemoryFlushEnabled(agent) &&
+        !(await wasMemoryFlushRequested(agent.id, compactingSessionId))
+      ) {
+        // Memory flush: keep the old session for this one run and ask the
+        // agent to save anything durable before its history is compacted
+        // away. The marker persists with this run's context, so the next run
+        // rotates normally and a session is only ever flushed once.
+        context.paperclipMemoryFlushSessionId = compactingSessionId;
+        context.paperclipMemoryFlushNote = MEMORY_FLUSH_NOTE;
+        sessionCompaction = {
+          rotate: false,
+          reason: null,
+          handoffMarkdown: null,
+          previousRunId: sessionCompaction.previousRunId,
+        };
+      }
       if (sessionCompaction.rotate) {
         context.paperclipSessionHandoffMarkdown =
           sessionCompaction.handoffMarkdown;
         context.paperclipSessionRotationReason = sessionCompaction.reason;
-        context.paperclipPreviousSessionId =
-          previousSessionDisplayId ?? runtimeSessionIdForAdapter;
+        context.paperclipPreviousSessionId = compactingSessionId;
+        publishPluginDomainEvent({
+          eventId: randomUUID(),
+          eventType: "agent.session.rotated",
+          occurredAt: new Date().toISOString(),
+          actorId: agent.id,
+          actorType: "agent",
+          entityId: run.id,
+          entityType: "heartbeat_run",
+          companyId: agent.companyId,
+          payload: {
+            agentId: agent.id,
+            runId: run.id,
+            issueId: issueId ?? null,
+            previousSessionId: compactingSessionId,
+            reason: sessionCompaction.reason,
+          },
+        });
         runtimeSessionIdForAdapter = null;
         runtimeSessionParamsForAdapter = null;
         previousSessionDisplayId = null;

@@ -90,6 +90,7 @@ const OPERATION_CAPABILITIES: Record<string, readonly PluginCapability[]> = {
 
   // Data write operations
   "issues.create": ["issues.create"],
+  "issues.ensureConversation": ["issues.create"],
   "issues.update": ["issues.update"],
   "issues.relations.setBlockedBy": ["issue.relations.write"],
   "issues.relations.addBlockers": ["issue.relations.write"],

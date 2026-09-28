@@ -820,6 +820,14 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           return callHost("issues.get", { issueId, companyId });
         },
 
+        async ensureConversation(input) {
+          return callHost("issues.ensureConversation", {
+            companyId: input.companyId,
+            agentId: input.agentId,
+            userId: input.userId,
+          });
+        },
+
         async create(input) {
           return callHost("issues.create", {
             companyId: input.companyId,
