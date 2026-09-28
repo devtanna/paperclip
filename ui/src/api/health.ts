@@ -29,6 +29,8 @@ export type HealthStatus = {
   deploymentMode?: "local_trusted" | "authenticated";
   deploymentExposure?: "private" | "public";
   localAiLoginSupported?: boolean;
+  /** Absent on older servers; treat as `open`. */
+  authSignUpMode?: "open" | "invite_only" | "disabled";
   authReady?: boolean;
   bootstrapStatus?: "ready" | "bootstrap_pending";
   bootstrapInviteActive?: boolean;

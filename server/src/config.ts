@@ -16,6 +16,7 @@ import {
   STORAGE_PROVIDERS,
   type BindMode,
   type AuthBaseUrlMode,
+  type AuthSignUpMode,
   type DeploymentExposure,
   type DeploymentMode,
   type SecretProvider,
@@ -67,6 +68,7 @@ export interface Config {
   authPublicBaseUrl: string | undefined;
   chatWebhookPublicBaseUrl: string | undefined;
   authDisableSignUp: boolean;
+  authSignUpMode: AuthSignUpMode;
   databaseMode: DatabaseMode;
   databaseUrl: string | undefined;
   databaseMigrationUrl: string | undefined;
@@ -227,6 +229,17 @@ export function loadConfig(): Config {
     disableSignUpFromEnv !== undefined
       ? disableSignUpFromEnv === "true"
       : (fileConfig?.auth?.disableSignUp ?? false);
+  const inviteOnlySignUpFromEnv = process.env.PAPERCLIP_AUTH_INVITE_ONLY_SIGN_UP;
+  const authInviteOnlySignUp: boolean =
+    inviteOnlySignUpFromEnv !== undefined
+      ? inviteOnlySignUpFromEnv === "true"
+      : (fileConfig?.auth?.inviteOnlySignUp ?? false);
+  // `disabled` wins: it is enforced inside Better Auth and blocks invitees too.
+  const authSignUpMode: AuthSignUpMode = authDisableSignUp
+    ? "disabled"
+    : authInviteOnlySignUp
+      ? "invite_only"
+      : "open";
   const allowedHostnamesFromEnvRaw = process.env.PAPERCLIP_ALLOWED_HOSTNAMES;
   const allowedHostnamesFromEnv = allowedHostnamesFromEnvRaw
     ? allowedHostnamesFromEnvRaw
@@ -328,6 +341,7 @@ export function loadConfig(): Config {
       process.env.PAPERCLIP_CHAT_WEBHOOK_PUBLIC_URL,
     ),
     authDisableSignUp,
+    authSignUpMode,
     databaseMode: fileDatabaseMode,
     databaseUrl: process.env.DATABASE_URL ?? fileDbUrl,
     databaseMigrationUrl: process.env.DATABASE_MIGRATION_URL,

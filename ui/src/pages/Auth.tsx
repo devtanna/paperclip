@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../api/auth";
+import { healthApi } from "../api/health";
 import { queryKeys } from "../lib/queryKeys";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,14 @@ export function AuthPage() {
     queryFn: () => authApi.getSession(),
     retry: false,
   });
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    retry: false,
+  });
+  // Invitees sign up from their invite link, so the public page only offers
+  // account creation when the instance allows open sign-up.
+  const signUpOpen = (health?.authSignUpMode ?? "open") === "open";
 
   useEffect(() => {
     if (session) {
@@ -185,19 +194,25 @@ export function AuthPage() {
             </Button>
           </form>
 
-          <div className="mt-5 text-sm text-muted-foreground">
-            {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
-            <button
-              type="button"
-              className="font-medium text-foreground underline underline-offset-2"
-              onClick={() => {
-                setError(null);
-                setMode(mode === "sign_in" ? "sign_up" : "sign_in");
-              }}
-            >
-              {mode === "sign_in" ? "Create one" : "Sign in"}
-            </button>
-          </div>
+          {signUpOpen ? (
+            <div className="mt-5 text-sm text-muted-foreground">
+              {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
+              <button
+                type="button"
+                className="font-medium text-foreground underline underline-offset-2"
+                onClick={() => {
+                  setError(null);
+                  setMode(mode === "sign_in" ? "sign_up" : "sign_in");
+                }}
+              >
+                {mode === "sign_in" ? "Create one" : "Sign in"}
+              </button>
+            </div>
+          ) : (
+            <p className="mt-5 text-sm text-muted-foreground">
+              New accounts are by invitation only. Ask an admin for an invite link.
+            </p>
+          )}
         </div>
       </div>
 

@@ -60,6 +60,8 @@ export const authConfigSchema = z.object({
   baseUrlMode: z.enum(AUTH_BASE_URL_MODES).default("auto"),
   publicBaseUrl: z.string().url().optional(),
   disableSignUp: z.boolean().default(false),
+  /** Refuse sign-up unless the request carries a valid human invite token. */
+  inviteOnlySignUp: z.boolean().optional(),
 }).passthrough();
 
 export const storageLocalDiskConfigSchema = z.object({

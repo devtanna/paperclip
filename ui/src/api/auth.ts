@@ -114,13 +114,17 @@ function logAuthHttpError(method: string, path: string, status: number, statusTe
   });
 }
 
-async function authPost(path: string, body: Record<string, unknown>): Promise<unknown> {
+async function authPost(
+  path: string,
+  body: Record<string, unknown>,
+  extraHeaders?: Record<string, string>,
+): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(`/api/auth${path}`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...extraHeaders },
       body: JSON.stringify(body),
     });
   } catch (networkError) {
@@ -176,8 +180,17 @@ export const authApi = {
     await authPost("/sign-in/email", input);
   },
 
-  signUpEmail: async (input: { name: string; email: string; password: string }) => {
-    await authPost("/sign-up/email", input);
+  /**
+   * `inviteToken` travels as a header so invite-only instances can admit the
+   * invitee; Better Auth never sees it in the body.
+   */
+  signUpEmail: async (input: { name: string; email: string; password: string; inviteToken?: string }) => {
+    const { inviteToken, ...body } = input;
+    await authPost(
+      "/sign-up/email",
+      body,
+      inviteToken ? { "X-Paperclip-Invite-Token": inviteToken } : undefined,
+    );
   },
 
   getPreferences: async (expectedUserId: string): Promise<CurrentUserPreferences> => {

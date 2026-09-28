@@ -1,0 +1,75 @@
+# Single-box internet-facing deployment (Hetzner Cloud or any VPS).
+#
+#   Caddy (80/443, automatic TLS) -> server (3100, internal only) -> db (internal only)
+#
+# Runbook: docs/deploy/hetzner.md. Secrets live in ./.env next to this file
+# (copy .env.example). Nothing but Caddy publishes a host port.
+name: paperclip
+
+services:
+  db:
+    # Postgres 17 with pgvector available, so memory search can use vectors.
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once, on first initialisation of an empty data volume.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+
+  server:
+    # Pin to an immutable tag your fork's Docker workflow published, e.g.
+    # ghcr.io/<you>/paperclip:sha-abc1234. Never deploy a moving tag.
+    image: "${PAPERCLIP_IMAGE:?PAPERCLIP_IMAGE must be set}"
+    restart: unless-stopped
+    # tini is PID 1 inside the image; see docker/docker-compose.yml for why
+    # there is no `init: true` here. pids_limit is the leak backstop.
+    pids_limit: 2048
+    environment:
+      DATABASE_URL: "postgres://paperclip:${POSTGRES_PASSWORD}@db:5432/paperclip"
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: public
+      PAPERCLIP_PUBLIC_URL: "https://${PAPERCLIP_DOMAIN:?PAPERCLIP_DOMAIN must be set}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Invite-only: invitees can still create accounts from their invite link.
+      PAPERCLIP_AUTH_INVITE_ONLY_SIGN_UP: "true"
+      # Caddy reaches the server over the compose network (a private range).
+      TRUST_PROXY: "uniquelocal"
+    volumes:
+      - paperclip-data:/paperclip
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PAPERCLIP_DOMAIN: "${PAPERCLIP_DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL:?ACME_EMAIL must be set}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - server
+
+volumes:
+  pgdata:
+  paperclip-data:
+  caddy-data:
+  caddy-config:

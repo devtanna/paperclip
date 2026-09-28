@@ -11,12 +11,19 @@ import { AuthPage } from "./Auth";
 const getSessionMock = vi.hoisted(() => vi.fn());
 const signInEmailMock = vi.hoisted(() => vi.fn());
 const signUpEmailMock = vi.hoisted(() => vi.fn());
+const getHealthMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/auth", () => ({
   authApi: {
     getSession: () => getSessionMock(),
     signInEmail: (input: unknown) => signInEmailMock(input),
     signUpEmail: (input: unknown) => signUpEmailMock(input),
+  },
+}));
+
+vi.mock("../api/health", () => ({
+  healthApi: {
+    get: () => getHealthMock(),
   },
 }));
 
@@ -88,6 +95,7 @@ describe("AuthPage", () => {
     getSessionMock.mockResolvedValue(null);
     signInEmailMock.mockResolvedValue(undefined);
     signUpEmailMock.mockResolvedValue(undefined);
+    getHealthMock.mockResolvedValue({ status: "ok" });
   });
 
   afterEach(() => {
@@ -172,6 +180,21 @@ describe("AuthPage", () => {
     });
   });
 
+  it("hides account creation when the instance is invite-only", async () => {
+    getHealthMock.mockResolvedValue({ status: "ok", authSignUpMode: "invite_only" });
+    const { root } = await mount();
+
+    const createOne = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Create one",
+    );
+    expect(createOne).toBeUndefined();
+    expect(container.textContent).toContain("New accounts are by invitation only.");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("renders auth errors in an assertive alert region referenced by the inputs", async () => {
     const { root } = await mount();
 
@@ -236,6 +259,7 @@ describe("AuthPage", () => {
       passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
+    const healthFetchesBeforeSignIn = getHealthMock.mock.calls.length;
     const form = container.querySelector("form") as HTMLFormElement;
     await act(async () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -247,7 +271,9 @@ describe("AuthPage", () => {
       email: "jane@example.com",
       password: "supersecret",
     });
-    expect(queryClient.getQueryState(queryKeys.health)?.isInvalidated).toBe(true);
+    // The page observes health (for the sign-up mode), so invalidation
+    // refetches immediately instead of leaving the entry marked stale.
+    expect(getHealthMock.mock.calls.length).toBeGreaterThan(healthFetchesBeforeSignIn);
 
     await act(async () => {
       root.unmount();

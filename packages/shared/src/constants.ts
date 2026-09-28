@@ -13,6 +13,13 @@ export type BindMode = (typeof BIND_MODES)[number];
 export const AUTH_BASE_URL_MODES = ["auto", "explicit"] as const;
 export type AuthBaseUrlMode = (typeof AUTH_BASE_URL_MODES)[number];
 
+/**
+ * Who may create a new account. `invite_only` still lets a person with a
+ * valid, unused human invite link sign up; everyone else is refused.
+ */
+export const AUTH_SIGN_UP_MODES = ["open", "invite_only", "disabled"] as const;
+export type AuthSignUpMode = (typeof AUTH_SIGN_UP_MODES)[number];
+
 export const AGENT_STATUSES = [
   "active",
   "paused",

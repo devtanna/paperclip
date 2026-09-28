@@ -1,0 +1,11 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$PAPERCLIP_DOMAIN} {
+	encode zstd gzip
+	# Streams (run logs, board chat) must not be buffered.
+	reverse_proxy server:3100 {
+		flush_interval -1
+	}
+}

@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
 import {
   derivePaperclipViteHmrPort,
+  type AuthSignUpMode,
   type DeploymentExposure,
   type DeploymentMode,
 } from "@paperclipai/shared";
@@ -170,6 +171,7 @@ import { createPluginHostServiceCleanup } from "./services/plugin-host-service-c
 import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
+import { EMAIL_SIGN_UP_PATH, inviteOnlySignUpGuard } from "./auth/invite-only-sign-up.js";
 import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
 import {
   DEFAULT_JSON_BODY_LIMIT,
@@ -479,6 +481,7 @@ export async function createApp(
     authPublicBaseUrl?: string;
     chatWebhookPublicBaseUrl?: string;
     authReady: boolean;
+    authSignUpMode?: AuthSignUpMode;
     companyDeletionEnabled: boolean;
     announcements?: { enabled: boolean; feedUrl: string };
     instanceId?: string;
@@ -571,6 +574,9 @@ export async function createApp(
   // the one endpoint it authorizes (see the middleware for the contract).
   app.use(cloudControlMiddleware());
   app.use("/api/auth", authRoutes(db));
+  if (opts.betterAuthHandler && opts.authSignUpMode === "invite_only") {
+    app.post(EMAIL_SIGN_UP_PATH, inviteOnlySignUpGuard(db));
+  }
   if (opts.betterAuthHandler) {
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
   }
@@ -646,6 +652,7 @@ export async function createApp(
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,
+      authSignUpMode: opts.authSignUpMode,
       companyDeletionEnabled: opts.companyDeletionEnabled,
       databaseBackupHealth: opts.databaseBackupHealth,
     }),

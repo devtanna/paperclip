@@ -62,6 +62,7 @@ Paperclip now treats **bind** as a separate concern from auth:
 - stricter deployment checks and failures in doctor
 - Better Auth request rate limiting is on by default; set `PAPERCLIP_AUTH_RATE_LIMIT_ENABLED=false` only when an explicit front-door limiter covers the deployment
 - recommended bind is `loopback` behind a reverse proxy; direct `lan/custom` is advanced
+- for a team instance, set `PAPERCLIP_AUTH_INVITE_ONLY_SIGN_UP=true`: only people holding a valid human invite link can create an account (`PAPERCLIP_AUTH_DISABLE_SIGN_UP=true` would also lock invitees out). Single-server runbook: `docs/deploy/hetzner.md`
 - local stdio MCP runtime slots fail closed by default; set `PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST` only when a trusted worker/runtime host is configured to supervise those processes. Remote HTTP MCP remains the preferred public-hosted path.
 
 ### Paperclip Cloud warm-pool identity
