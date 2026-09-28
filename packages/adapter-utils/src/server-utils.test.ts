@@ -22,6 +22,7 @@ import {
   materializePaperclipSkillCopy,
   PAPERCLIP_OPERATIONAL_SKILL_KEY,
   refreshPaperclipWorkspaceEnvForExecution,
+  renderPaperclipPluginContext,
   renderPaperclipWakePrompt,
   resolveLegacyPaperclipDesiredSkillNames,
   resolvePaperclipDesiredSkillNames,
@@ -3017,6 +3018,20 @@ describe("WATCHDOG_DEFAULT_MANDATE", () => {
     expect(WATCHDOG_DEFAULT_MANDATE).toContain(
       "exactly one reusable watchdog issue per watched issue.",
     );
+  });
+});
+
+describe("renderPaperclipPluginContext", () => {
+  it("returns nothing when no plugin contributed context", () => {
+    expect(renderPaperclipPluginContext({})).toBe("");
+    expect(renderPaperclipPluginContext({ paperclipPluginContextMarkdown: "   " })).toBe("");
+    expect(renderPaperclipPluginContext(null)).toBe("");
+  });
+
+  it("wraps contributed markdown under one heading", () => {
+    expect(
+      renderPaperclipPluginContext({ paperclipPluginContextMarkdown: "## Memory\n\nLaunch is Friday.\n" }),
+    ).toBe("# Context from plugins\n\n## Memory\n\nLaunch is Friday.");
   });
 });
 

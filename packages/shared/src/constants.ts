@@ -1417,6 +1417,8 @@ export const PLUGIN_CAPABILITIES = [
   "local.folders",
   // Agent Tools
   "agent.tools.register",
+  // Add plugin-supplied markdown (e.g. recalled memory) to agent run prompts.
+  "agent.context.contribute",
   // UI
   "instance.settings.register",
   "ui.sidebar.register",

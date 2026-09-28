@@ -84,6 +84,7 @@ import type {
   PluginPerformActionContext,
   ExecuteToolParams,
   DetectExternalObjectsParams,
+  ContributeRunContextParams,
   ResolveExternalObjectParams,
   RefreshExternalObjectsParams,
   PluginEnvironmentAcquireLeaseParams,
@@ -1620,6 +1621,8 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         return handleExecuteTool(params as ExecuteToolParams);
       case "detectExternalObjects":
         return handleDetectExternalObjects(params as DetectExternalObjectsParams);
+      case "contributeRunContext":
+        return handleContributeRunContext(params as ContributeRunContextParams);
       case "resolveExternalObject":
         return handleResolveExternalObject(params as ResolveExternalObjectParams);
       case "refreshExternalObjects":
@@ -1733,6 +1736,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     if (plugin.definition.onShutdown) supportedMethods.push("shutdown");
     if (plugin.definition.onApiRequest) supportedMethods.push("handleApiRequest");
     if (plugin.definition.onDetectExternalObjects) supportedMethods.push("detectExternalObjects");
+    if (plugin.definition.onContributeRunContext) supportedMethods.push("contributeRunContext");
     if (plugin.definition.onResolveExternalObject) supportedMethods.push("resolveExternalObject");
     if (plugin.definition.onRefreshExternalObjects) supportedMethods.push("refreshExternalObjects");
     if (plugin.definition.onEnvironmentValidateConfig) supportedMethods.push("environmentValidateConfig");
@@ -1979,6 +1983,13 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       throw methodNotImplemented("detectExternalObjects");
     }
     return plugin.definition.onDetectExternalObjects(params);
+  }
+
+  async function handleContributeRunContext(params: ContributeRunContextParams) {
+    if (!plugin.definition.onContributeRunContext) {
+      throw methodNotImplemented("contributeRunContext");
+    }
+    return plugin.definition.onContributeRunContext(params);
   }
 
   async function handleResolveExternalObject(params: ResolveExternalObjectParams) {

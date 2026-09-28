@@ -167,6 +167,8 @@ export type {
   DetectExternalObjectsParams,
   PluginExternalObjectDetection,
   DetectExternalObjectsResult,
+  ContributeRunContextParams,
+  ContributeRunContextResult,
   PluginExternalObjectRecordSnapshot,
   ResolveExternalObjectParams,
   PluginExternalObjectResolvedSnapshot,

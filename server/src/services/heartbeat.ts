@@ -616,6 +616,11 @@ import {
   type EffectiveRunConfigSecretManifestEntry,
 } from "./effective-run-config-fingerprints.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { collectPluginRunContext } from "./plugin-run-context.js";
+import {
+  isWithinHeartbeatActiveHours,
+  parseHeartbeatActiveHours,
+} from "./heartbeat-active-hours.js";
 import { serverVersion } from "../version.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
@@ -16604,6 +16609,9 @@ export function heartbeatService(
           heartbeat.dailySpendCentsLimit ??
           heartbeat.dailyBudgetCents,
       ),
+      activeHours: parseHeartbeatActiveHours(heartbeat.activeHours),
+      // Model for scheduler timer wakes only; other wakes keep the adapter model.
+      timerModel: readNonEmptyString(heartbeat.model),
     };
   }
 
@@ -21371,6 +21379,18 @@ export function heartbeatService(
       // Always replace this runtime-only field; caller wake data cannot supply skills.
       context.paperclipWake = { ...parseObject(context.paperclipWake), connectorSkillInstructions: connectorDelivery.instructions };
       let runtimeConfig: Record<string, unknown> = connectorDelivery.config;
+      // Scheduler timer heartbeats may run on a cheaper triage model.
+      const timerHeartbeatModel =
+        run.invocationSource === "timer" &&
+        readNonEmptyString(context.wakeReason) === "heartbeat_timer"
+          ? parseHeartbeatPolicy(agent).timerModel
+          : null;
+      if (timerHeartbeatModel) {
+        runtimeConfig = { ...runtimeConfig, model: timerHeartbeatModel };
+        context.paperclipHeartbeatModelOverride = timerHeartbeatModel;
+      } else {
+        delete context.paperclipHeartbeatModelOverride;
+      }
       const latestAgentConfigRevision = await getLatestAgentConfigRevision(
         agent.companyId,
         agent.id,
@@ -22627,6 +22647,35 @@ export function heartbeatService(
         delete context.paperclipSessionHandoffMarkdown;
         delete context.paperclipSessionRotationReason;
         delete context.paperclipPreviousSessionId;
+      }
+
+      // Plugin-contributed prompt context (e.g. recalled memory). Bounded by a
+      // short timeout and a character budget; failures add nothing.
+      const pluginRunContext = await collectPluginRunContext(
+        db,
+        options.pluginWorkerManager,
+        {
+          companyId: run.companyId,
+          agentId: agent.id,
+          runId: run.id,
+          wakeReason: readNonEmptyString(context.wakeReason),
+          invocationSource: run.invocationSource ?? null,
+          issueId: issueId ?? null,
+          conversationMode: context.conversationMode === true,
+        },
+      ).catch((error) => {
+        logger.warn({ err: error, runId: run.id }, "plugin run context collection failed");
+        return { markdown: "", sources: [] };
+      });
+      if (pluginRunContext.markdown) {
+        context.paperclipPluginContextMarkdown = pluginRunContext.markdown;
+      } else {
+        delete context.paperclipPluginContextMarkdown;
+      }
+      if (pluginRunContext.sources.length > 0) {
+        context.paperclipPluginContextSources = pluginRunContext.sources;
+      } else {
+        delete context.paperclipPluginContextSources;
       }
 
       const taskSessionCredentialCompatible = isTaskSessionCredentialCompatible(
@@ -29671,6 +29720,15 @@ export function heartbeatService(
         ).getTime();
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
+        // Outside active hours: leave the baseline alone so the agent is due
+        // as soon as the window opens.
+        if (
+          policy.activeHours &&
+          !isWithinHeartbeatActiveHours(policy.activeHours, now)
+        ) {
+          skipped += 1;
+          continue;
+        }
         const timerClaim = await claimDueTimerHeartbeat(
           agent,
           now,

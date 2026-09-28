@@ -2196,6 +2196,17 @@ export function selectPaperclipTaskMarkdown(
   return compact || full;
 }
 
+// Plugin-contributed run context (for example recalled memory). The server
+// collects it from plugins declaring `agent.context.contribute` before the
+// run starts, already sectioned and size-capped; adapters place it after the
+// wake prompt on fresh and resumed sessions alike.
+export function renderPaperclipPluginContext(
+  context: Record<string, unknown> | null | undefined,
+): string {
+  const markdown = asString(context?.paperclipPluginContextMarkdown, "").trim();
+  return markdown ? `# Context from plugins\n\n${markdown}` : "";
+}
+
 // Runtime-only connector skills are supplied by the server after assignment resolution.
 // Shared-home adapters consume them here on fresh and resumed runs without installing
 // files into a user-wide skills directory. They are not part of serialized wake data.

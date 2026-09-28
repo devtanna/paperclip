@@ -81,6 +81,8 @@ import type {
   PluginEnvironmentValidationResult,
   DetectExternalObjectsParams,
   DetectExternalObjectsResult,
+  ContributeRunContextParams,
+  ContributeRunContextResult,
   ResolveExternalObjectParams,
   PluginExternalObjectResolveResult,
   RefreshExternalObjectsParams,
@@ -338,6 +340,18 @@ export interface PluginDefinition {
   onDetectExternalObjects?(
     params: DetectExternalObjectsParams,
   ): Promise<DetectExternalObjectsResult>;
+
+  /**
+   * Called just before an agent run builds its prompt. Return markdown to add
+   * to that run's prompt (for example recalled memory). The host enforces a
+   * short timeout and `params.maxChars`; a failure or timeout adds nothing and
+   * never blocks the run.
+   *
+   * Requires `agent.context.contribute`.
+   */
+  onContributeRunContext?(
+    params: ContributeRunContextParams,
+  ): Promise<ContributeRunContextResult>;
 
   /**
    * Called when Paperclip needs the current normalized status for one external

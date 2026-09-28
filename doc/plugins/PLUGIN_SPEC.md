@@ -641,6 +641,25 @@ The host provides:
 
 The worker executes the tool and returns a typed result (string content, structured data, or error).
 
+### 13.11 `contributeRunContext`
+
+Adds plugin-supplied markdown (for example recalled memory) to an agent run's prompt. Requires `agent.context.contribute`; the SDK hook is `onContributeRunContext`.
+
+The host calls every ready plugin declaring the capability just before the adapter builds its prompt, in parallel, and provides:
+
+- company ID, agent ID, run ID
+- wake reason and invocation source
+- issue ID, when the run is issue-scoped
+- whether the run answers an Agent Chat conversation
+- `maxChars`, this plugin's share of the run's context budget
+
+The worker returns `{ markdown }`. The host:
+
+- waits at most 1.5 seconds per plugin; a timeout or error adds nothing and never fails the run
+- truncates each result to `maxChars` (all plugins share 24,000 characters)
+- places the results under a `# Context from plugins` heading, one `##` section per plugin, after the wake prompt on fresh and resumed sessions
+- records which plugins contributed, and their sizes and errors, in the run context snapshot (`paperclipPluginContextSources`)
+
 ## 14. SDK Surface
 
 Plugins do not talk to the DB directly.
@@ -864,6 +883,7 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 ### Agent Tools
 
 - `agent.tools.register`
+- `agent.context.contribute`
 
 ### UI
 

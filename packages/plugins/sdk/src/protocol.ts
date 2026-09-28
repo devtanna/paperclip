@@ -503,6 +503,30 @@ export interface DetectExternalObjectsResult {
   detections: PluginExternalObjectDetection[];
 }
 
+/**
+ * Input for the `contributeRunContext` RPC method: the run that is about to
+ * start. The host calls every ready plugin declaring `agent.context.contribute`
+ * just before the adapter builds its prompt.
+ */
+export interface ContributeRunContextParams {
+  companyId: string;
+  agentId: string;
+  runId: string;
+  /** Scheduler or wake reason, e.g. `heartbeat_timer`, `issue_assigned`. */
+  wakeReason: string | null;
+  invocationSource: string | null;
+  issueId: string | null;
+  /** True when the run answers an Agent Chat conversation (issue-backed). */
+  conversationMode: boolean;
+  /** Character budget this plugin's markdown is truncated to. */
+  maxChars: number;
+}
+
+export interface ContributeRunContextResult {
+  /** Markdown added to the run prompt; empty or absent adds nothing. */
+  markdown?: string | null;
+}
+
 export interface PluginExternalObjectRecordSnapshot {
   id: string;
   companyId: string;
@@ -1347,6 +1371,10 @@ export interface HostToWorkerMethods {
     params: DetectExternalObjectsParams,
     result: DetectExternalObjectsResult,
   ];
+  contributeRunContext: [
+    params: ContributeRunContextParams,
+    result: ContributeRunContextResult,
+  ];
   resolveExternalObject: [
     params: ResolveExternalObjectParams,
     result: PluginExternalObjectResolveResult,
@@ -1471,6 +1499,7 @@ export const HOST_TO_WORKER_OPTIONAL_METHODS: readonly HostToWorkerMethodName[] 
   "performAction",
   "executeTool",
   "detectExternalObjects",
+  "contributeRunContext",
   "resolveExternalObject",
   "refreshExternalObjects",
   "environmentValidateConfig",
