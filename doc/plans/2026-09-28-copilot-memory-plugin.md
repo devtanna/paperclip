@@ -452,6 +452,34 @@ Each step is tested locally with `pnpm dev`, then deployed to Hetzner and checke
 
 **Full gate before the PR:** `pnpm -r typecheck && pnpm test:run && pnpm build && pnpm check:token-gates`.
 
+## Implementation notes (2026-09-28)
+
+Where the build differs from the plan above, and why:
+
+- **No blind heartbeat for the Copilot.**
+  - The plugin's pulse (plain queries every N minutes) wakes the Copilot through `ctx.agents.invoke`, and only when the pulse has items and changed. The agent's own interval heartbeat stays off.
+  - This is cheaper than an LLM "anything changed?" turn every 30 minutes.
+  - C3's heartbeat `activeHours` and timer `model` remain as generic agent features.
+- **Memory flush setting lives under the heartbeat policy:** `runtimeConfig.heartbeat.memoryFlush: true`. The agent settings form edits heartbeat fields as one object, and a separate top-level key would have been overwritten by other edits.
+  - The flush keeps the old session for one more run and prepends a "save memory" note, rather than making an extra silent run. So a flush costs no additional LLM run.
+- **Rotation event:** named `agent.session.rotated` and emitted when rotation happens.
+- **Morning brief, nightly consolidation, weekly review:** built-in plugin schedules (editable, disableable), not managed routines. Routines create an issue per run and are one per company in the manifest, while these are lightweight wakes.
+  - For recurring work that should produce tasks, the Copilot creates ordinary Paperclip routines through the Paperclip API. The plugin SDK can only manage manifest-declared routines.
+- **Delivery:**
+  - New SDK method `ctx.issues.ensureConversation` opens (or finds) the Agent Chat between the Copilot and a person.
+  - `copilot_notify` then posts there as the Copilot. Only the Copilot may notify, capped per person per day.
+- **Tool access:** Paperclip denies plugin tools unless a tool policy allows them. The UI offers two ordinary allow-policies, created through the core API as the signed-in user:
+  - the Copilot's tools, for the Copilot
+  - memory tools, for all agents
+- **Proactive scope:** background plugin work may only act for companies where an operator saved the plugin's config (the host's consent boundary). Turning the Copilot on saves it; the first time needs an instance admin.
+- **Undo for dreaming:** every memory write keeps a revision, and the Memory page's **History** restores any version. The dedicated diff-per-promotion Dreams tab became this general history, which also covers manual edits.
+- **Deferred:**
+  - the chat "proactive" badge (Copilot messages are ordinary Agent Chat comments)
+  - per-member timezones for the morning brief (it uses the Copilot's timezone)
+  - "goals with no active issues" in the pulse
+
+Operations, bounds, and teardown are documented in `doc/copilot-operations.md`.
+
 ## Research sources
 
 - https://docs.openclaw.ai/concepts/memory

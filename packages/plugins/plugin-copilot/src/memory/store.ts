@@ -74,7 +74,7 @@ function vectorLiteral(vector: readonly number[]): string {
 }
 
 /** Timestamps are selected as epoch milliseconds (see UPDATED_AT_MS) to avoid driver text formats. */
-const UPDATED_AT_MS = "(extract(epoch from updated_at) * 1000)::float8 AS updated_at";
+const UPDATED_AT_MS = "(date_part('epoch', updated_at) * 1000)::float8 AS updated_at";
 
 function toIso(value: string | number | Date): string {
   const date = value instanceof Date ? value : new Date(Number(value));
@@ -401,8 +401,9 @@ export async function indexDocument(
     const vector = vectors[i];
     await db.execute(
       `INSERT INTO ${table(db, "memory_chunks")}
-         (id, document_id, company_id, scope_kind, scope_id, chunk_index, start_line, end_line, text, tsv, embedding, embedding_model)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_tsvector('english', $10), $11::real[], $12)`,
+         (id, document_id, company_id, scope_kind, scope_id, chunk_index, start_line, end_line, text, tsv,
+          embedding, embedding_model, content_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_tsvector('english', $10), $11::real[], $12, $13)`,
       [
         randomUUID(),
         document.id,
@@ -416,6 +417,7 @@ export async function indexDocument(
         `${document.path}\n${chunk.text}`,
         vector ? realArrayLiteral(vector) : null,
         vector && embeddings ? embeddings.model : null,
+        sha256(chunk.text),
       ],
     );
   }
@@ -636,4 +638,72 @@ export async function searchMemory(
       noteDate: candidate.noteDate,
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Revisions (history and undo)
+// ---------------------------------------------------------------------------
+
+export interface MemoryRevision {
+  id: string;
+  documentId: string;
+  body: string;
+  actorKind: string | null;
+  actorId: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export async function listRevisions(
+  db: PluginDatabaseClient,
+  companyId: string,
+  documentId: string,
+  limit = 20,
+): Promise<MemoryRevision[]> {
+  const rows = await db.query<Record<string, unknown>>(
+    `SELECT id, document_id, body, actor_kind, actor_id, reason, ${UPDATED_AT_MS.replace(/updated_at/g, "created_at")}
+       FROM ${table(db, "memory_document_revisions")}
+      WHERE company_id = $1 AND document_id = $2
+      ORDER BY created_at DESC
+      LIMIT $3`,
+    [companyId, documentId, Math.min(limit, 100)],
+  );
+  return rows.map((row) => ({
+    id: String(row.id),
+    documentId: String(row.document_id),
+    body: String(row.body),
+    actorKind: (row.actor_kind as string | null) ?? null,
+    actorId: (row.actor_id as string | null) ?? null,
+    reason: (row.reason as string | null) ?? null,
+    createdAt: toIso(row.created_at as number),
+  }));
+}
+
+/** Restores a revision as a new write, so the undo itself can be undone. */
+export async function restoreRevision(
+  db: PluginDatabaseClient,
+  companyId: string,
+  revisionId: string,
+  actor: MemoryActor,
+): Promise<MemoryDocument> {
+  const rows = await db.query<DocumentRow & { revision_body: string }>(
+    `SELECT d.id, d.company_id, d.scope_kind, d.scope_id, d.path, d.body, d.content_hash,
+            d.note_date::text AS note_date, (date_part('epoch', d.updated_at) * 1000)::float8 AS updated_at,
+            r.body AS revision_body
+       FROM ${table(db, "memory_document_revisions")} r
+       JOIN ${table(db, "memory_documents")} d ON d.id = r.document_id
+      WHERE r.company_id = $1 AND r.id = $2`,
+    [companyId, revisionId],
+  );
+  const row = rows[0];
+  if (!row) throw new Error("Revision not found");
+  const document = toDocument(row);
+  return writeDocument(db, {
+    companyId,
+    scope: document.scope,
+    path: document.path,
+    body: row.revision_body,
+    actor,
+    reason: `restored revision ${revisionId}`,
+  });
 }

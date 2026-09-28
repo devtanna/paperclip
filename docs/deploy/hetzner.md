@@ -136,6 +136,21 @@ docker compose exec -T db pg_restore -U paperclip -d paperclip --clean --if-exis
 
 The server applies database migrations on start. To roll back, restore the backup taken in step 1 and set the previous tag.
 
+## Teardown
+
+Everything the stack stores lives in its Docker volumes. The only thing on the host outside `/opt/paperclip` is the backup cron file.
+
+```bash
+cd /opt/paperclip/docker/hetzner
+docker compose down -v        # stops the stack and deletes pgdata, paperclip-data, and Caddy certificates
+rm -f /etc/cron.d/paperclip-backup
+rm -rf /opt/paperclip
+```
+
+Off-server backups on the Storage Box are kept on purpose. Delete them separately with `restic forget --tag paperclip --prune` or by deleting the repository.
+
+To remove only the Copilot plugin and its data, uninstall it with purge (see `doc/copilot-operations.md`).
+
 ## Check the deployment
 
 - `https://<your domain>` loads over HTTPS and shows sign-in, with no "Create one" link.

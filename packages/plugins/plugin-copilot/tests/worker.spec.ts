@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
-import manifest, { REINDEX_JOB_KEY } from "../src/manifest.js";
+import manifest, { COPILOT_TICK_JOB_KEY, REINDEX_JOB_KEY } from "../src/manifest.js";
+import { COPILOT_TOOL_NAMES } from "../src/copilot/tools.js";
 import { MEMORY_TOOL_NAMES } from "../src/memory/service.js";
 import plugin from "../src/worker.js";
 
@@ -15,9 +16,10 @@ async function setup() {
 
 describe("copilot memory worker", () => {
   it("declares a tool for every registered memory tool and the context capability", () => {
-    expect(manifest.tools?.map((tool) => tool.name).sort()).toEqual([...MEMORY_TOOL_NAMES].sort());
+    expect(manifest.tools?.map((tool) => tool.name).sort()).toEqual([...MEMORY_TOOL_NAMES, ...COPILOT_TOOL_NAMES].sort());
     expect(manifest.capabilities).toContain("agent.context.contribute");
-    expect(manifest.jobs?.map((job) => job.jobKey)).toEqual([REINDEX_JOB_KEY]);
+    expect(manifest.jobs?.map((job) => job.jobKey).sort()).toEqual([COPILOT_TICK_JOB_KEY, REINDEX_JOB_KEY].sort());
+    expect(manifest.agents?.[0]?.instructions?.files?.["HEARTBEAT.md"]).toContain("Pulse Checklist");
   });
 
   it("answers memory_search from the plugin database, scoped to company and agent", async () => {
@@ -41,7 +43,17 @@ describe("copilot memory worker", () => {
       { text: "hello", scope: "user" },
       { companyId: COMPANY_ID, agentId: AGENT_ID, runId: "run-1" },
     );
-    expect(result.error).toMatch(/scope must be/);
+    expect(result.error).toMatch(/Only the company Copilot/);
+  });
+
+  it("only lets the Copilot message people", async () => {
+    const harness = await setup();
+    const result = await harness.executeTool<{ error?: string }>(
+      "copilot_notify",
+      { userId: "all", message: "hi" },
+      { companyId: COMPANY_ID, agentId: AGENT_ID, runId: "run-1" },
+    );
+    expect(result.error).toMatch(/Only the company Copilot/);
   });
 
   it("contributes no run context when there is no memory yet", async () => {

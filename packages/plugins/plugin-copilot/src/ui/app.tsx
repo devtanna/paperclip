@@ -7,22 +7,8 @@ import {
   type PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-
-const PLUGIN_KEY = "paperclipai.plugin-copilot";
-
-// Host theme variables with dark fallbacks, so the page matches the board.
-const tokens = {
-  border: "var(--border, oklch(0.269 0 0))",
-  card: "var(--card, oklch(0.205 0 0))",
-  fg: "var(--foreground, oklch(0.985 0 0))",
-  muted: "var(--muted-foreground, oklch(0.708 0 0))",
-  accent: "var(--accent, oklch(0.269 0 0))",
-  primary: "var(--primary, oklch(0.985 0 0))",
-  primaryFg: "var(--primary-foreground, oklch(0.205 0 0))",
-  destructive: "var(--destructive, oklch(0.637 0.237 25.331))",
-  radius: "var(--radius, 8px)",
-};
-const fontStack = "var(--font-sans, ui-sans-serif, system-ui, sans-serif)";
+import { api, Button, ErrorLine, errorText, fontStack, formatTime, tokens, useIsNarrow } from "./shared.js";
+import { allowMemoryToolsForAllAgents, listCopilotPolicies } from "./tool-access.js";
 
 type ScopeKind = "company" | "user" | "agent";
 
@@ -69,70 +55,8 @@ interface IndexStatus {
   mode: "hybrid" | "keyword";
 }
 
-class ApiError extends Error {}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/plugins/${PLUGIN_KEY}/api${path}`, {
-    credentials: "include",
-    headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}) },
-    ...init,
-  });
-  const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-  if (!response.ok) throw new ApiError(payload?.error ?? `Request failed (${response.status})`);
-  return payload as T;
-}
-
-function useIsNarrow(): boolean {
-  const query = "(max-width: 767px)";
-  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const onChange = () => setNarrow(media.matches);
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-  return narrow;
-}
-
 function sameDoc(a: { scope: Scope; path: string } | null, b: { scope: Scope; path: string }): boolean {
   return Boolean(a && a.scope.kind === b.scope.kind && a.scope.id === b.scope.id && a.path === b.path);
-}
-
-function Button(props: {
-  children: ReactNode;
-  onClick?: () => void;
-  primary?: boolean;
-  disabled?: boolean;
-  type?: "button" | "submit";
-}) {
-  return (
-    <button
-      type={props.type ?? "button"}
-      onClick={props.onClick}
-      disabled={props.disabled}
-      style={{
-        padding: "6px 12px",
-        borderRadius: tokens.radius,
-        border: `1px solid ${props.primary ? tokens.primary : tokens.border}`,
-        background: props.primary ? tokens.primary : "transparent",
-        color: props.primary ? tokens.primaryFg : tokens.fg,
-        fontSize: 13,
-        cursor: props.disabled ? "default" : "pointer",
-        opacity: props.disabled ? 0.5 : 1,
-      }}
-    >
-      {props.children}
-    </button>
-  );
-}
-
-function ErrorLine({ message }: { message: string | null }) {
-  if (!message) return null;
-  return (
-    <p role="alert" style={{ color: tokens.destructive, fontSize: 13, margin: "8px 0" }}>
-      {message}
-    </p>
-  );
 }
 
 function MemoryIcon() {
@@ -222,6 +146,7 @@ export function MemoryPage({ context }: PluginPageProps) {
         </span>
       </header>
       <ErrorLine message={loadError} />
+      <MemoryToolsBanner companyId={companyId} />
       <SearchBox companyId={companyId} onOpen={(scope, path) => setSelected({ scope, path })} />
       <div
         style={{
@@ -376,6 +301,7 @@ function DocumentPane(props: {
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -456,11 +382,28 @@ function DocumentPane(props: {
               </Button>
             </>
           ) : (
-            <Button onClick={() => setEditing(true)}>Edit</Button>
+            <>
+              {document && document.exists !== false ? (
+                <Button onClick={() => setShowHistory(!showHistory)}>{showHistory ? "Hide history" : "History"}</Button>
+              ) : null}
+              <Button onClick={() => setEditing(true)}>Edit</Button>
+            </>
           )}
         </div>
       </div>
       <ErrorLine message={error} />
+      {showHistory ? (
+        <RevisionHistory
+          companyId={companyId}
+          target={target}
+          onRestored={async (restored) => {
+            setDocument(restored);
+            setDraft(restored.body);
+            setShowHistory(false);
+            await props.onSaved();
+          }}
+        />
+      ) : null}
       {document === null && !error ? (
         <Spinner />
       ) : editing ? (
@@ -581,5 +524,106 @@ function StatusBar({ status }: { status: IndexStatus }) {
       {status.embeddedChunks ? ` (${status.embeddedChunks} embedded)` : ""}
       {status.pending ? ` · ${status.pending} waiting to index` : ""}
     </footer>
+  );
+}
+
+interface Revision {
+  id: string;
+  body: string;
+  actorKind: string | null;
+  actorId: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+/** Earlier versions of a file; restoring one is itself a new version, so it can be undone too. */
+function RevisionHistory(props: {
+  companyId: string;
+  target: { scope: Scope; path: string };
+  onRestored: (document: MemoryDocument) => Promise<void>;
+}) {
+  const { companyId, target } = props;
+  const [revisions, setRevisions] = useState<Revision[] | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ companyId, scopeKind: target.scope.kind, scopeId: target.scope.id, path: target.path });
+    api<{ revisions: Revision[] }>(`/revisions?${params.toString()}`)
+      .then((result) => setRevisions(result.revisions))
+      .catch((caught: unknown) => setError(errorText(caught)));
+  }, [companyId, target.scope.kind, target.scope.id, target.path]);
+
+  const restore = async (revisionId: string) => {
+    setError(null);
+    try {
+      const result = await api<{ document: MemoryDocument }>("/revisions/restore", {
+        method: "POST",
+        body: JSON.stringify({ companyId, revisionId }),
+      });
+      await props.onRestored(result.document);
+    } catch (caught) {
+      setError(errorText(caught));
+    }
+  };
+
+  return (
+    <div style={{ borderTop: `1px solid ${tokens.border}`, borderBottom: `1px solid ${tokens.border}`, padding: "8px 0", marginBottom: 12 }}>
+      <ErrorLine message={error} />
+      {revisions === null && !error ? <Spinner /> : null}
+      {revisions && revisions.length === 0 ? <p style={{ fontSize: 13, color: tokens.muted }}>No earlier versions.</p> : null}
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {(revisions ?? []).map((revision) => (
+          <li key={revision.id} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "6px 0" }}>
+            <span style={{ fontSize: 12, color: tokens.muted }}>
+              {formatTime(revision.createdAt)} · replaced by {revision.actorKind ?? "unknown"}
+              {revision.reason ? ` (${revision.reason})` : ""}
+            </span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <Button onClick={() => setPreview(preview === revision.id ? null : revision.id)}>
+                {preview === revision.id ? "Hide" : "Preview"}
+              </Button>
+              <Button onClick={() => restore(revision.id)}>Restore</Button>
+            </span>
+            {preview === revision.id ? (
+              <pre style={{ width: "100%", whiteSpace: "pre-wrap", fontSize: 12, margin: 0, color: tokens.muted }}>{revision.body}</pre>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Offers the one access policy that lets agents use memory tools, if it is missing. */
+function MemoryToolsBanner({ companyId }: { companyId: string }) {
+  const [state, setState] = useState<"unknown" | "missing" | "allowed">("unknown");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    listCopilotPolicies(companyId)
+      .then((found) => setState(found.memory?.enabled ? "allowed" : "missing"))
+      .catch(() => setState("unknown"));
+  }, [companyId]);
+  if (state !== "missing") return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, border: `1px solid ${tokens.border}`, borderRadius: tokens.radius, padding: "8px 12px", marginBottom: 12, fontSize: 13 }}>
+      <span>
+        Memory is recalled into every run, but agents cannot search or write it until tool access allows the memory tools.
+      </span>
+      <Button
+        onClick={async () => {
+          setError(null);
+          try {
+            await allowMemoryToolsForAllAgents(companyId);
+            setState("allowed");
+          } catch (caught) {
+            setError(errorText(caught));
+          }
+        }}
+      >
+        Allow for all agents
+      </Button>
+      <ErrorLine message={error} />
+    </div>
   );
 }

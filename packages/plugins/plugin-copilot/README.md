@@ -1,6 +1,31 @@
 # Copilot Memory
 
-OpenClaw-style long-term memory for a Paperclip company. It is the first part of the company copilot plan in [doc/plans/2026-09-28-copilot-memory-plugin.md](../../../doc/plans/2026-09-28-copilot-memory-plugin.md).
+An always-on company Copilot with OpenClaw-style memory for Paperclip. It implements the plan in [doc/plans/2026-09-28-copilot-memory-plugin.md](../../../doc/plans/2026-09-28-copilot-memory-plugin.md). What runs in the background and how it is bounded: [doc/copilot-operations.md](../../../doc/copilot-operations.md).
+
+## Copilot
+
+**Turning it on.** Open **Copilot** in the sidebar and choose **Set up Copilot**. The first time needs an instance admin, because it saves the plugin's settings for the company, which is how Paperclip authorizes background work. Setting up does four things:
+
+1. Adds a managed **Copilot** agent: OpenCode by default, $30/month budget, paused until turned on. Pick its model on the agent page.
+2. Creates one tool access policy that lets the Copilot use its tools.
+3. Starts the pulse.
+4. Adds three built-in schedules you can change or disable: the weekday morning brief, nightly memory consolidation, and the Friday weekly review.
+
+**How it runs:**
+
+- **Pulse.** Every 30 minutes inside active hours, the plugin checks the company with plain queries: stale, blocked, and waiting tasks, old approvals, budget, due commitments, and new events (failed runs, people's comments, new approvals). It wakes the Copilot only when something changed, capped per hour. The Copilot follows `agents/copilot/HEARTBEAT.md` and replies `HEARTBEAT_OK` when nothing needs doing.
+- **Commitments.** "I'll send the deck Friday" becomes a tracked commitment; due ones show up in the pulse.
+- **Schedules.** One-time, interval, or cron wakes with a message, created by people on the Copilot page or by agents with `schedule_*` tools. For work that should create a task every time, use Paperclip routines.
+- **Messages.** `copilot_notify` posts into each person's Agent Chat with the Copilot, which also reaches their inbox. There is a daily cap per person.
+- **Kill switch.** **Turn off** stops the pulse and every schedule and pauses the agent.
+
+**Core changes this plugin relies on** (all generic):
+- plugin run-context contribution (`agent.context.contribute`)
+- `ctx.issues.ensureConversation`
+- heartbeat `activeHours`, timer `model`, and `memoryFlush`
+- the `agent.session.rotated` event
+- purge-uninstall dropping the plugin schema
+
 
 ## What it does
 
@@ -24,7 +49,17 @@ Everything fits inside the budget the host sets, and the run's context snapshot 
 - MMR (λ = 0.7) to drop near-duplicates
 - snippets capped at 700 characters
 
-**Agent tools:** `memory_search`, `memory_get`, `memory_note` (append to today's log), `memory_write` (curate a file), `memory_forget`, `memory_list`. Every write keeps the previous version as a revision. Writes to company memory are recorded in the activity log.
+**Agent tools:**
+- `memory_search`
+- `memory_get`
+- `memory_note` (append to today's log)
+- `memory_write` (curate a file)
+- `memory_forget`
+- `memory_list`
+
+Every write keeps the previous version as a revision; the Memory page's **History** can restore any of them. Writes to company memory are recorded in the activity log.
+
+Agents can call plugin tools only when a tool access policy allows them. The Memory page offers **Allow for all agents**, which creates one editable policy.
 
 **Auto-capture:** each finished or failed agent run appends one line to that agent's daily log. Turn it off with **Log agent runs to daily notes**.
 

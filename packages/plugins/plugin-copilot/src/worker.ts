@@ -5,7 +5,11 @@ import {
   type PluginApiResponse,
   type PluginContext,
 } from "@paperclipai/plugin-sdk";
-import { REINDEX_JOB_KEY } from "./manifest.js";
+import { COPILOT_TICK_JOB_KEY, REINDEX_JOB_KEY } from "./manifest.js";
+import { runCopilotTick } from "./copilot/engine.js";
+import { COPILOT_ROUTE_KEYS, handleCopilotRoute } from "./copilot/routes.js";
+import { recordSignalFromEvent, SIGNAL_EVENT_TYPES } from "./copilot/signals.js";
+import { registerCopilotTools } from "./copilot/tools.js";
 import { dailyLogPath, isMemoryScopeKind, type MemoryScope } from "./memory/paths.js";
 import {
   agentScope,
@@ -22,7 +26,9 @@ import {
   hasVectorExtension,
   indexStatus,
   listBrowsableDocuments,
+  listRevisions,
   reindexPending,
+  restoreRevision,
   searchMemory,
   writeDocument,
 } from "./memory/store.js";
@@ -79,8 +85,45 @@ function isResponse(value: MemoryScope | PluginApiResponse): value is PluginApiR
 }
 
 async function handleApiRequest(ctx: PluginContext, input: PluginApiRequestInput): Promise<PluginApiResponse> {
+  if (COPILOT_ROUTE_KEYS.has(input.routeKey)) return handleCopilotRoute(ctx, input);
   const companyId = input.companyId;
   const userId = input.actor.userId ?? null;
+
+  if (input.routeKey === "revisions") {
+    const scope = await resolveBoardScope(ctx, input, queryString(input, "scopeKind"), queryString(input, "scopeId"));
+    if (isResponse(scope)) return scope;
+    const path = queryString(input, "path");
+    if (!path) return badRequest("path is required");
+    const document = await getDocument(ctx.db, companyId, scope, path);
+    return { body: { revisions: document ? await listRevisions(ctx.db, companyId, document.id) : [] } };
+  }
+
+  if (input.routeKey === "restore-revision") {
+    const revisionId = bodyField(input, "revisionId");
+    if (typeof revisionId !== "string" || !revisionId) return badRequest("revisionId is required");
+    const revisions = await ctx.db.query<{ scope_kind: string; scope_id: string }>(
+      `SELECT d.scope_kind, d.scope_id FROM ${ctx.db.namespace}.memory_document_revisions r
+         JOIN ${ctx.db.namespace}.memory_documents d ON d.id = r.document_id
+        WHERE r.company_id = $1 AND r.id = $2`,
+      [companyId, revisionId],
+    );
+    const target = revisions[0];
+    if (!target) return { status: 404, body: { error: "Revision not found" } };
+    // Same visibility rule as reading: only your own personal memory.
+    const scope = await resolveBoardScope(ctx, input, target.scope_kind, target.scope_id);
+    if (isResponse(scope)) return scope;
+    const document = await restoreRevision(ctx.db, companyId, revisionId, { kind: "user", id: userId });
+    await ctx.activity
+      .log({
+        companyId,
+        message: `Restored an earlier version of ${scope.kind} memory ${document.path}`,
+        entityType: "memory_document",
+        entityId: document.id,
+        metadata: { revisionId, userId },
+      })
+      .catch(() => undefined);
+    return { body: { document } };
+  }
 
   if (input.routeKey === "status") {
     const [status, vector, embeddings] = await Promise.all([
@@ -194,6 +237,22 @@ const plugin = definePlugin({
   async setup(ctx) {
     activeContext = ctx;
     registerMemoryTools(ctx);
+    registerCopilotTools(ctx);
+
+    ctx.jobs.register(COPILOT_TICK_JOB_KEY, async () => {
+      await runCopilotTick(ctx);
+    });
+
+    for (const eventName of SIGNAL_EVENT_TYPES) {
+      ctx.events.on(eventName, async (event) => {
+        await recordSignalFromEvent(ctx, event).catch((error) =>
+          ctx.logger.warn("copilot signal capture failed", {
+            eventType: event.eventType,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      });
+    }
 
     ctx.jobs.register(REINDEX_JOB_KEY, async () => {
       const indexed = await reindexPending(ctx.db, (companyId) => resolveEmbeddings(ctx, companyId), {
@@ -217,6 +276,9 @@ const plugin = definePlugin({
       });
     }
   },
+
+  // Config is read per company on every use, so a change needs no restart.
+  async onConfigChanged() {},
 
   async onContributeRunContext(params) {
     return { markdown: await buildRunContext(requireContext(), params) };

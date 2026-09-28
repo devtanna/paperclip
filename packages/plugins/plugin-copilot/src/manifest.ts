@@ -1,14 +1,38 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { DEFAULT_EMBEDDINGS_BASE_URL, DEFAULT_EMBEDDINGS_MODEL } from "./memory/embeddings.js";
+import { copilotInstructionFiles } from "./templates.js";
 
 export const PLUGIN_ID = "paperclipai.plugin-copilot";
 export const REINDEX_JOB_KEY = "memory-reindex";
+export const COPILOT_TICK_JOB_KEY = "copilot-tick";
 
 const scopeParameter = {
   type: "string",
-  enum: ["company", "agent"],
-  description: "`company` is shared by every agent and teammate; `agent` is your own private memory.",
+  enum: ["company", "agent", "user"],
+  description:
+    "`company` is shared by every agent and teammate; `agent` is your own private memory; `user` (Copilot only, with userId) is one person's private memory.",
 };
+const userIdParameter = { type: "string", description: "Person's user id, for scope `user` (Copilot only)." };
+
+const instructionFiles = copilotInstructionFiles();
+
+const scheduleTimingProperties = {
+  at: { type: "string", description: "One-time run, ISO date-time with offset." },
+  everyMinutes: { type: "number", description: "Fixed interval in minutes (5 or more)." },
+  cron: { type: "string", description: "5-field cron, e.g. `30 8 * * 1-5` (at most every 5 minutes)." },
+  timezone: { type: "string", description: "IANA timezone for cron, default the Copilot's timezone." },
+};
+
+const boardRoute = (routeKey: string, method: "GET" | "POST" | "PATCH" | "DELETE", path: string) => ({
+  routeKey,
+  method,
+  path,
+  auth: "board" as const,
+  capability: "api.routes.register" as const,
+  companyResolution: method === "GET" || method === "DELETE"
+    ? { from: "query" as const, key: "companyId" }
+    : { from: "body" as const, key: "companyId" },
+});
 
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
@@ -16,7 +40,7 @@ const manifest: PaperclipPluginManifestV1 = {
   version: "0.1.0",
   displayName: "Copilot Memory",
   description:
-    "OpenClaw-style long-term memory for your company: MEMORY.md, per-person USER.md and daily logs, with hybrid keyword and vector search recalled into every agent run.",
+    "An always-on company Copilot with OpenClaw-style memory: MEMORY.md, per-person USER.md and daily logs recalled into every agent run, a proactive company pulse, commitments, schedules, and nightly consolidation.",
   author: "Paperclip",
   categories: ["automation", "ui"],
   capabilities: [
@@ -27,7 +51,16 @@ const manifest: PaperclipPluginManifestV1 = {
     "database.namespace.write",
     "companies.read",
     "issues.read",
+    "issues.create",
+    "issue.comments.read",
+    "issue.comments.create",
+    "approvals.read",
     "agents.read",
+    "agents.managed",
+    "agents.invoke",
+    "agents.pause",
+    "agents.resume",
+    "access.members.read",
     "agent.tools.register",
     "agent.context.contribute",
     "activity.log.write",
@@ -37,6 +70,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "instance.settings.register",
     "ui.sidebar.register",
     "ui.page.register",
+    "ui.dashboardWidget.register",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -76,7 +110,42 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
   },
+  agents: [
+    {
+      agentKey: "copilot",
+      displayName: "Copilot",
+      role: "general",
+      title: "Company Copilot",
+      icon: "brain",
+      capabilities:
+        "Watches the whole company, remembers what matters, follows up on stuck work and commitments, and briefs the team.",
+      adapterType: "opencode_local",
+      adapterPreference: ["opencode_local", "claude_local", "codex_local", "gemini_local", "hermes_local", "pi_local"],
+      adapterConfig: {},
+      runtimeConfig: {
+        // The plugin's pulse wakes the Copilot only when something changed, so
+        // the blind interval heartbeat stays off.
+        heartbeat: { enabled: false, wakeOnDemand: true, maxConcurrentRuns: 1, memoryFlush: true },
+      },
+      permissions: { canCreateAgents: false },
+      status: "paused",
+      budgetMonthlyCents: 3000,
+      instructions: {
+        entryFile: "AGENTS.md",
+        content: instructionFiles["AGENTS.md"],
+        files: instructionFiles,
+        assetPath: "agents/copilot",
+      },
+    },
+  ],
   jobs: [
+    {
+      jobKey: COPILOT_TICK_JOB_KEY,
+      displayName: "Copilot tick",
+      description:
+        "Fires due schedules, checks the company pulse (plain queries; wakes the Copilot only when something changed), and prunes old history daily.",
+      schedule: "* * * * *",
+    },
     {
       jobKey: REINDEX_JOB_KEY,
       displayName: "Reindex memory",
@@ -109,6 +178,7 @@ const manifest: PaperclipPluginManifestV1 = {
         properties: {
           path: { type: "string" },
           scope: scopeParameter,
+          userId: userIdParameter,
           fromLine: { type: "number" },
           lines: { type: "number" },
         },
@@ -125,6 +195,7 @@ const manifest: PaperclipPluginManifestV1 = {
         properties: {
           text: { type: "string" },
           scope: scopeParameter,
+          userId: userIdParameter,
         },
         required: ["text"],
       },
@@ -140,6 +211,7 @@ const manifest: PaperclipPluginManifestV1 = {
           path: { type: "string" },
           content: { type: "string" },
           scope: scopeParameter,
+          userId: userIdParameter,
           reason: { type: "string", description: "Why this changed, for the revision history." },
         },
         required: ["path", "content"],
@@ -156,6 +228,7 @@ const manifest: PaperclipPluginManifestV1 = {
           path: { type: "string" },
           match: { type: "string" },
           scope: scopeParameter,
+          userId: userIdParameter,
           reason: { type: "string" },
         },
         required: ["path", "match"],
@@ -166,6 +239,112 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: "List Memory Files",
       description: "List the company and personal memory files you can read.",
       parametersSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "company_pulse",
+      displayName: "Company Pulse",
+      description: "Show what needs attention across the company right now: stale, blocked, and waiting tasks, approvals, budget, due commitments, and recent events.",
+      parametersSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "team_members",
+      displayName: "Team Members",
+      description: "List the people in the company (user ids and roles).",
+      parametersSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "copilot_notify",
+      displayName: "Message A Person",
+      description:
+        "Copilot only. Send a message to a person's Agent Chat with you (it also reaches their inbox). Use sparingly: each person has a daily cap.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          userId: { type: "string", description: "The person's user id, or `all` for every active member." },
+          message: { type: "string" },
+          urgency: { type: "string", enum: ["normal", "urgent"] },
+        },
+        required: ["userId", "message"],
+      },
+    },
+    {
+      name: "commitment_create",
+      displayName: "Record Commitment",
+      description: "Record a promise with an optional due date so it gets followed up (e.g. \"Sam will send the deck by Friday\").",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          dueAt: { type: "string", description: "ISO date-time." },
+          ownerUserId: { type: "string" },
+          ownerAgentId: { type: "string" },
+          issueId: { type: "string", description: "Related task, if any." },
+        },
+        required: ["text"],
+      },
+    },
+    {
+      name: "commitment_list",
+      displayName: "List Commitments",
+      description: "List commitments (default: open).",
+      parametersSchema: {
+        type: "object",
+        properties: { status: { type: "string", enum: ["open", "done", "cancelled", "all"] } },
+      },
+    },
+    {
+      name: "commitment_complete",
+      displayName: "Complete Commitment",
+      description: "Mark a commitment done (or cancelled).",
+      parametersSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, status: { type: "string", enum: ["done", "cancelled"] } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "schedule_create",
+      displayName: "Create Schedule",
+      description:
+        "Wake yourself (or another agent) later with a message: once (`at`), on an interval (`everyMinutes`), or on a `cron`. For work that should create a task every time, create a Paperclip routine instead.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          message: { type: "string", description: "What to do when it fires." },
+          ...scheduleTimingProperties,
+          targetAgentId: { type: "string", description: "Agent to wake; defaults to you." },
+        },
+        required: ["name", "message"],
+      },
+    },
+    {
+      name: "schedule_list",
+      displayName: "List Schedules",
+      description: "List schedules in this company.",
+      parametersSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "schedule_update",
+      displayName: "Update Schedule",
+      description: "Change a schedule's timing, message, or enabled state.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          message: { type: "string" },
+          ...scheduleTimingProperties,
+          enabled: { type: "boolean" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "schedule_delete",
+      displayName: "Delete Schedule",
+      description: "Delete a schedule you created (built-in ones can only be disabled).",
+      parametersSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   ],
   apiRoutes: [
@@ -209,6 +388,21 @@ const manifest: PaperclipPluginManifestV1 = {
       capability: "api.routes.register",
       companyResolution: { from: "query", key: "companyId" },
     },
+    boardRoute("revisions", "GET", "/revisions"),
+    boardRoute("restore-revision", "POST", "/revisions/restore"),
+    boardRoute("copilot", "GET", "/copilot"),
+    boardRoute("copilot-enable", "POST", "/copilot/enable"),
+    boardRoute("copilot-disable", "POST", "/copilot/disable"),
+    boardRoute("copilot-settings", "PATCH", "/copilot/settings"),
+    boardRoute("copilot-pulse", "GET", "/copilot/pulse"),
+    boardRoute("copilot-check-in", "POST", "/copilot/check-in"),
+    boardRoute("schedules", "GET", "/schedules"),
+    boardRoute("create-schedule", "POST", "/schedules"),
+    boardRoute("update-schedule", "PATCH", "/schedules/:id"),
+    boardRoute("delete-schedule", "DELETE", "/schedules/:id"),
+    boardRoute("run-schedule", "POST", "/schedules/:id/run"),
+    boardRoute("commitments", "GET", "/commitments"),
+    boardRoute("update-commitment", "PATCH", "/commitments/:id"),
   ],
   ui: {
     slots: [
@@ -225,6 +419,26 @@ const manifest: PaperclipPluginManifestV1 = {
         displayName: "Memory",
         exportName: "MemoryPage",
         routePath: "memory",
+      },
+      {
+        type: "sidebar",
+        id: "copilot-sidebar",
+        displayName: "Copilot",
+        exportName: "CopilotSidebarLink",
+        order: 35,
+      },
+      {
+        type: "page",
+        id: "copilot-page",
+        displayName: "Copilot",
+        exportName: "CopilotPage",
+        routePath: "copilot",
+      },
+      {
+        type: "dashboardWidget",
+        id: "copilot-widget",
+        displayName: "Copilot",
+        exportName: "CopilotWidget",
       },
     ],
   },

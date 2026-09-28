@@ -19,6 +19,7 @@ import {
   yesterday,
   type MemoryScope,
 } from "./paths.js";
+import { getSettings as getCopilotSettings } from "../copilot/store.js";
 import {
   appendToDocument,
   getDocument,
@@ -174,11 +175,30 @@ function requireText(value: unknown, name: string): string {
   return value;
 }
 
-/** Tools address the shared company memory or the calling agent's own. */
-function toolScope(value: unknown, run: ToolRunContext, fallback: "company" | "agent"): MemoryScope {
+/**
+ * Tools address the shared company memory or the calling agent's own. Only
+ * the company's Copilot may address a person's private memory (`user` scope
+ * plus `userId`), to maintain their USER.md.
+ */
+async function toolScope(
+  ctx: PluginContext,
+  params: ToolParams,
+  run: ToolRunContext,
+  fallback: "company" | "agent",
+): Promise<MemoryScope> {
+  const value = params.scope;
   const kind = value === undefined || value === null || value === "" ? fallback : value;
   if (kind === "company") return companyScope(run.companyId);
   if (kind === "agent") return agentScope(run.agentId);
+  if (kind === "user") {
+    const settings = await getCopilotSettings(ctx.db, run.companyId);
+    if (!settings.agentId || settings.agentId !== run.agentId) {
+      throw new Error('Only the company Copilot can use scope "user"');
+    }
+    const userId = typeof params.userId === "string" ? params.userId.trim() : "";
+    if (!userId) throw new Error('scope "user" requires userId');
+    return userScope(userId);
+  }
   throw new Error(`scope must be "company" or "agent"${isMemoryScopeKind(kind) ? " for agent tools" : ""}`);
 }
 
@@ -208,14 +228,8 @@ function asTool(fn: (params: ToolParams, run: ToolRunContext) => Promise<ToolRes
   };
 }
 
-export const MEMORY_TOOL_NAMES = [
-  "memory_search",
-  "memory_get",
-  "memory_note",
-  "memory_write",
-  "memory_forget",
-  "memory_list",
-] as const;
+export { MEMORY_TOOL_NAMES } from "../tool-names.js";
+import { MEMORY_TOOL_NAMES } from "../tool-names.js";
 
 export function registerMemoryTools(ctx: PluginContext): void {
   const schemaFor = (name: string) =>
@@ -250,7 +264,7 @@ export function registerMemoryTools(ctx: PluginContext): void {
   });
 
   register("memory_get", "Read Memory File", async (params, run) => {
-    const scope = toolScope(params.scope, run, "company");
+    const scope = await toolScope(ctx, params, run, "company");
     const path = requireText(params.path, "path");
     const document = await getDocument(ctx.db, run.companyId, scope, path);
     if (!document) return { content: `No ${scope.kind} memory file at ${path}.`, data: { exists: false } };
@@ -265,7 +279,7 @@ export function registerMemoryTools(ctx: PluginContext): void {
   });
 
   register("memory_note", "Note To Daily Log", async (params, run) => {
-    const scope = toolScope(params.scope, run, "agent");
+    const scope = await toolScope(ctx, params, run, "agent");
     const text = requireText(params.text, "text");
     const now = new Date();
     const path = dailyLogPath(now);
@@ -283,7 +297,7 @@ export function registerMemoryTools(ctx: PluginContext): void {
   });
 
   register("memory_write", "Write Memory File", async (params, run) => {
-    const scope = toolScope(params.scope, run, "agent");
+    const scope = await toolScope(ctx, params, run, "agent");
     const path = requireText(params.path, "path");
     const content = typeof params.content === "string" ? params.content : requireText(params.content, "content");
     const document = await writeDocument(ctx.db, {
@@ -299,7 +313,7 @@ export function registerMemoryTools(ctx: PluginContext): void {
   });
 
   register("memory_forget", "Forget Memory Lines", async (params, run) => {
-    const scope = toolScope(params.scope, run, "agent");
+    const scope = await toolScope(ctx, params, run, "agent");
     const path = requireText(params.path, "path");
     const match = requireText(params.match, "match").toLowerCase();
     const document = await getDocument(ctx.db, run.companyId, scope, path);
