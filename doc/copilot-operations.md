@@ -76,4 +76,10 @@ Local development keeps all of this inside `~/.paperclip/instances/<instance>/`.
 
 ## Soak test
 
-See the results at the end of `doc/plans/2026-09-28-copilot-memory-plugin.md` (Soak test).
+A 45-minute soak with task and comment churn every minute showed:
+- the plugin worker flat at about 92 MB
+- no process or error growth
+- schedules firing exactly on time
+- the Copilot waking only when the pulse changed
+
+Full numbers are in `doc/plans/2026-09-28-copilot-memory-plugin.md` (Soak test).

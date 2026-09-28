@@ -480,6 +480,37 @@ Where the build differs from the plan above, and why:
 
 Operations, bounds, and teardown are documented in `doc/copilot-operations.md`.
 
+## Soak test (2026-09-28)
+
+**Setup:**
+- 45 minutes on an isolated local instance: embedded Postgres, `pnpm dev:server` with Vite UI middleware.
+- Copilot Memory installed and the Copilot turned on through the plugin API. The Copilot ran on the `process` adapter (echoes `HEARTBEAT_OK`), so the pulse → wake → run loop was real but cost nothing.
+- Pulse every 5 minutes, always active, up to 30 check-ins per hour.
+- Two user schedules every 5 minutes.
+- Churn every minute: one new task, and one person's comment on a random task.
+
+| Measure | Start | End (45 min) |
+|---|---|---|
+| Plugin worker memory | 91 MB (after a 221 MB startup peak) | 92 MB (flat, 91–93) |
+| Server memory | ~780 MB | ~1,085 MB (one step at minute 9 when the UI was opened, which is Vite compiling the UI in dev mode; flat afterwards) |
+| Postgres postmaster memory | 26 MB | 26 MB |
+| Processes (server, worker, Postgres, running agents) | 3 | 3 (5 only while an agent run was in flight) |
+| Tasks created | 1 | 45 |
+| Copilot wakes / agent runs | 0 / 0 | 24 / 16 (wakes that arrive during a run merge into it) |
+| Pulse wakes | — | 9, each only after new comments changed the pulse |
+| Schedule fires | — | 16 (two schedules every 5 minutes, none missed or doubled) |
+| Errors | — | 0 after the proactive-scope fix below |
+
+**Found and fixed during the soak:**
+1. **Background calls lacked company scope.** The plugin's background calls were refused ("company context is required") because the plugin had no saved config for the company. Turning the Copilot on now saves the plugin config, which grants proactive scope.
+2. **Pulse data sources failed silently.** When a data source failed, the pulse quietly treated it as empty. Failures are now shown on the Copilot page and logged.
+
+**After shutdown:** zero leftover processes, and the instance folder was removed with `rm -rf`.
+
+**Not covered here:**
+- The pgvector query path, since local embedded Postgres has no pgvector. It first runs on a server with the extension.
+- A production build's memory profile; the server numbers above include Vite dev middleware.
+
 ## Research sources
 
 - https://docs.openclaw.ai/concepts/memory
