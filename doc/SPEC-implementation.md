@@ -1282,6 +1282,8 @@ Scheduler must skip invocation when:
 - an existing run is active
 - hard budget limit has been hit
 
+Agent initiative (`runtimeConfig.heartbeat.initiative`: `off` | `low` | `balanced` | `high`; `balanced` when unset) adds self-started runs, separate from the interval heartbeat. With them an agent looks for work in its role, raises `Idea: …` issues, and requests confirmation before any external or costly step. They are bounded per level by runs per rolling 24 hours, by a share of the agent's monthly budget (or a daily cost cap when there is no budget), and by the heartbeat active hours. They are spaced evenly across the active window and never start while the agent has a queued or running run. See `doc/agent-initiative.md`.
+
 Legacy execution records a renewable controller lease when claiming a queued run,
 before provisioning. A live lease protects the run during overlapping service
 deployments. An expired controller loses dispatch authority; a recovery worker

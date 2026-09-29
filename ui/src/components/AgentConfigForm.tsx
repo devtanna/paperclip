@@ -64,6 +64,7 @@ import { useCompany } from "../context/CompanyContext";
 import {
   Field,
   ToggleField,
+  InitiativeSlider,
   ToggleWithNumber,
   CollapsibleSection,
   DraftInput,
@@ -1985,6 +1986,10 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 numberPrefix="Run heartbeat every"
                 numberHint={help.intervalSec}
                 showNumber={eff("heartbeat", "enabled", heartbeat.enabled === true)}
+              />
+              <InitiativeSlider
+                value={eff("heartbeat", "initiative", heartbeat.initiative ?? undefined)}
+                onChange={(level) => mark("heartbeat", "initiative", level)}
               />
             </div>
             <CollapsibleSection

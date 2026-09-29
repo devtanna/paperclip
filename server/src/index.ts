@@ -1624,6 +1624,24 @@ async function startServerWithDatabaseTeardown(
     };
     await runRetentionSweep();
 
+    // Single-flight: an initiative tick that outlasts the scheduler interval
+    // must not overlap the next one, or an agent could be woken twice.
+    let initiativeTickInFlight = false;
+    const runInitiativeTick = async (now: Date) => {
+      if (initiativeTickInFlight || !heartbeat) return;
+      initiativeTickInFlight = true;
+      try {
+        const result = await heartbeat.tickInitiative(now);
+        if (result.enqueued > 0) {
+          logger.info({ ...result }, "agent initiative tick enqueued runs");
+        }
+      } catch (err) {
+        logger.error({ err }, "agent initiative tick failed");
+      } finally {
+        initiativeTickInFlight = false;
+      }
+    };
+
     startHeartbeatSchedulerInterval(() => {
       // Track the outer async callback as well as the work it starts. Shutdown
       // can then wait through an already-running suppression check before it
@@ -1655,6 +1673,7 @@ async function startServerWithDatabaseTeardown(
             .catch((err) => {
               logger.error({ err }, "heartbeat timer tick failed");
             }));
+          trackHeartbeatSchedulerWork(runInitiativeTick(new Date()));
         }
 
         if (heartbeatSchedulerStopped) return;

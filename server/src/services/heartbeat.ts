@@ -138,6 +138,7 @@ import {
   environmentLeases,
   issueDocuments,
   executionWorkspaces,
+  goals,
   heartbeatRunEvents,
   heartbeatRuns,
   issueApprovals,
@@ -621,6 +622,16 @@ import {
   isWithinHeartbeatActiveHours,
   parseHeartbeatActiveHours,
 } from "./heartbeat-active-hours.js";
+import {
+  buildInitiativePrompt,
+  evaluateInitiative,
+  INITIATIVE_TASK_KEY,
+} from "./agent-initiative.js";
+import {
+  AGENT_INITIATIVE_POLICIES,
+  AGENT_INITIATIVE_WAKE_REASON,
+  agentInitiativeLevelFromRuntimeConfig,
+} from "@paperclipai/shared";
 import { serverVersion } from "../version.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
@@ -16633,8 +16644,9 @@ export function heartbeatService(
           heartbeat.dailyBudgetCents,
       ),
       activeHours: parseHeartbeatActiveHours(heartbeat.activeHours),
-      // Model for scheduler timer wakes only; other wakes keep the adapter model.
+      // Model for scheduler timer and initiative wakes; other wakes keep the adapter model.
       timerModel: readNonEmptyString(heartbeat.model),
+      initiative: agentInitiativeLevelFromRuntimeConfig(runtimeConfig),
     };
   }
 
@@ -21402,10 +21414,11 @@ export function heartbeatService(
       // Always replace this runtime-only field; caller wake data cannot supply skills.
       context.paperclipWake = { ...parseObject(context.paperclipWake), connectorSkillInstructions: connectorDelivery.instructions };
       let runtimeConfig: Record<string, unknown> = connectorDelivery.config;
-      // Scheduler timer heartbeats may run on a cheaper triage model.
+      // Scheduler timer heartbeats and initiative scans may run on a cheaper model.
+      const scheduledWakeReason = readNonEmptyString(context.wakeReason);
       const timerHeartbeatModel =
-        run.invocationSource === "timer" &&
-        readNonEmptyString(context.wakeReason) === "heartbeat_timer"
+        (run.invocationSource === "timer" && scheduledWakeReason === "heartbeat_timer") ||
+        (run.invocationSource === "automation" && scheduledWakeReason === AGENT_INITIATIVE_WAKE_REASON)
           ? parseHeartbeatPolicy(agent).timerModel
           : null;
       if (timerHeartbeatModel) {
@@ -29822,6 +29835,167 @@ export function heartbeatService(
         enqueued: enqueued + issueMonitors.triggered,
         skipped: skipped + issueMonitors.skipped,
       };
+    },
+
+    /**
+     * Agent initiative: wake agents to look for work in their role that nobody
+     * assigned (see services/agent-initiative.ts). Independent of the interval
+     * heartbeat. Bounded per agent by the level's runs per day and budget share,
+     * spaced across the agent's active hours, and at most one new run per
+     * company per tick so a company's agents never start all at once.
+     */
+    tickInitiative: async (now = new Date()) => {
+      const result = { checked: 0, enqueued: 0, skipped: 0 };
+      if ((await getSchedulingSuppression()).suppressed) return result;
+      if (await getWorktreeExecutionCutoff()) return result;
+
+      const allAgents = await db
+        .select({
+          ...getTableColumns(agents),
+          companyName: companies.name,
+          companyDescription: companies.description,
+        })
+        .from(agents)
+        .innerJoin(companies, eq(companies.id, agents.companyId))
+        .where(eq(companies.status, "active"));
+      const agentsByCompany = groupAgentOrgRowsByCompany(allAgents.map(toAgentOrgRow));
+      const companiesStarted = new Set<string>();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const initiativeRun = sql`${heartbeatRuns.contextSnapshot} ->> 'wakeReason' = ${AGENT_INITIATIVE_WAKE_REASON}`;
+
+      for (const agent of allAgents) {
+        if (companiesStarted.has(agent.companyId)) continue;
+        const policy = parseHeartbeatPolicy(agent);
+        if (policy.initiative === "off" || !policy.wakeOnDemand) continue;
+        const invokability = evaluateAgentInvokability(
+          toAgentOrgRow(agent),
+          agentsByCompany.get(agent.companyId) ?? [],
+        );
+        if (!invokability.invokable) continue;
+        if (policy.activeHours && !isWithinHeartbeatActiveHours(policy.activeHours, now)) continue;
+        result.checked += 1;
+
+        // Never stack on top of work the agent is already doing.
+        const [busy] = await db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.agentId, agent.id),
+              inArray(heartbeatRuns.status, ["queued", "running", "scheduled_retry"]),
+            ),
+          )
+          .limit(1);
+        if (busy) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const [runStats] = await db
+          .select({
+            runs: sql<number>`count(*) filter (where ${heartbeatRuns.createdAt} >= ${dayAgo.toISOString()}::timestamptz)::integer`,
+            lastRunAt: sql<Date | string | null>`max(${heartbeatRuns.createdAt})`,
+          })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.companyId, agent.companyId),
+              eq(heartbeatRuns.agentId, agent.id),
+              gte(heartbeatRuns.createdAt, monthStart < dayAgo ? monthStart : dayAgo),
+              initiativeRun,
+            ),
+          );
+        const [costStats] = await db
+          .select({
+            day: sql<number>`coalesce(sum(${costEvents.costCents}) filter (where ${costEvents.occurredAt} >= ${dayAgo.toISOString()}::timestamptz), 0)::bigint`,
+            month: sql<number>`coalesce(sum(${costEvents.costCents}) filter (where ${costEvents.occurredAt} >= ${monthStart.toISOString()}::timestamptz), 0)::bigint`,
+          })
+          .from(costEvents)
+          .innerJoin(heartbeatRuns, eq(heartbeatRuns.id, costEvents.heartbeatRunId))
+          .where(
+            and(
+              eq(costEvents.companyId, agent.companyId),
+              eq(costEvents.agentId, agent.id),
+              gte(costEvents.occurredAt, monthStart < dayAgo ? monthStart : dayAgo),
+              initiativeRun,
+            ),
+          );
+        const runsLast24h = Number(runStats?.runs ?? 0);
+        const decision = evaluateInitiative({
+          level: policy.initiative,
+          now,
+          agentCreatedAt: new Date(agent.createdAt),
+          activeHours: policy.activeHours,
+          budgetMonthlyCents: agent.budgetMonthlyCents,
+          usage: {
+            runsLast24h,
+            lastRunAt: runStats?.lastRunAt ? new Date(runStats.lastRunAt) : null,
+            costCentsLast24h: Number(costStats?.day ?? 0),
+            costCentsThisMonth: Number(costStats?.month ?? 0),
+          },
+        });
+        if (!decision.due) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const companyGoals = await db
+          .select({
+            title: goals.title,
+            description: goals.description,
+            level: goals.level,
+            ownerAgentId: goals.ownerAgentId,
+          })
+          .from(goals)
+          .where(and(eq(goals.companyId, agent.companyId), inArray(goals.status, ["active", "planned"])))
+          .orderBy(desc(sql`${goals.status} = 'active'`), desc(goals.updatedAt))
+          .limit(8);
+        const prompt = buildInitiativePrompt({
+          agent: {
+            name: agent.name,
+            role: agent.role,
+            title: agent.title,
+            capabilities: agent.capabilities,
+          },
+          company: { name: agent.companyName, description: agent.companyDescription },
+          goals: companyGoals.map((goal) => ({
+            title: goal.title,
+            description: goal.description,
+            level: goal.level,
+            ownedByThisAgent: goal.ownerAgentId === agent.id,
+          })),
+          level: policy.initiative,
+          runsLeftToday: AGENT_INITIATIVE_POLICIES[policy.initiative].maxRunsPerDay - runsLast24h - 1,
+        });
+
+        const run = await enqueueWakeup(agent.id, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: AGENT_INITIATIVE_WAKE_REASON,
+          requestedByActorType: "system",
+          requestedByActorId: "initiative_scheduler",
+          contextSnapshot: {
+            source: "initiative_scheduler",
+            wakeReason: AGENT_INITIATIVE_WAKE_REASON,
+            taskKey: INITIATIVE_TASK_KEY,
+            // Continuity lives in the agent's memory, not a growing session.
+            forceFreshSession: true,
+            paperclipInitiative: { level: policy.initiative },
+            paperclipAgentMessage: { text: prompt, source: "agent_initiative" },
+          },
+        }).catch((error: unknown) => {
+          logger.warn({ err: error, agentId: agent.id }, "initiative wake failed");
+          return null;
+        });
+        if (run) {
+          result.enqueued += 1;
+          companiesStarted.add(agent.companyId);
+        } else {
+          result.skipped += 1;
+        }
+      }
+      return result;
     },
 
     cancelRun: (runId: string, reason?: string, options?: CancelRunOptions) =>

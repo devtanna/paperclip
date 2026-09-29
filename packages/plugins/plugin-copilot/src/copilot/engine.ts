@@ -83,12 +83,33 @@ async function scheduleContext(ctx: PluginContext, schedule: Schedule, now: Date
     .filter((member) => member.principalType === "user" && member.status === "active")
     .map((member) => `- userId ${member.principalId} (${member.membershipRole ?? "member"})`);
   const settings = await getSettings(ctx.db, schedule.companyId);
-  const pulse = await gatherPulse(ctx, settings, now).catch(() => null);
+  const [pulse, ideas] = await Promise.all([
+    gatherPulse(ctx, settings, now).catch(() => null),
+    recentAgentIdeas(ctx, schedule.companyId, now),
+  ]);
   return [
     `People:\n${people.join("\n") || "- (none)"}`,
     `Open commitments:\n${commitments.map((c) => `- [${c.id.slice(0, 8)}] ${c.ownerKind} ${c.ownerId ?? ""}: ${c.text}${c.dueAt ? ` (due ${c.dueAt})` : ""}`).join("\n") || "- (none)"}`,
+    `Ideas agents raised on their own since yesterday (merge duplicates; tell each person which ones wait for their approval):\n${ideas.join("\n") || "- (none)"}`,
     `Current pulse:\n${pulse?.markdown || "(quiet)"}`,
   ].join("\n\n");
+}
+
+const IDEA_LOOKBACK_MS = 36 * 60 * 60 * 1000;
+const IDEA_STATUSES = ["in_review", "todo", "in_progress", "backlog", "blocked"] as const;
+
+/** Issues agents opened in initiative runs ("Idea: …" titles), newest first. */
+async function recentAgentIdeas(ctx: PluginContext, companyId: string, now: Date): Promise<string[]> {
+  const since = now.getTime() - IDEA_LOOKBACK_MS;
+  const lists = await Promise.all(
+    IDEA_STATUSES.map((status) => ctx.issues.list({ companyId, status, limit: 200 }).catch(() => [])),
+  );
+  return lists
+    .flat()
+    .filter((issue) => /^idea:/i.test(issue.title.trim()) && new Date(issue.createdAt).getTime() >= since)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 20)
+    .map((issue) => `- ${issue.identifier ?? issue.id.slice(0, 8)} [${issue.status}] ${issue.title.trim()}`);
 }
 
 async function fireSchedule(ctx: PluginContext, schedule: Schedule, settings: CopilotSettings, now: Date): Promise<void> {

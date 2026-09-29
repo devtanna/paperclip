@@ -16,7 +16,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { HelpCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "../lib/utils";
-import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
+import {
+  AGENT_INITIATIVE_LEVELS,
+  AGENT_INITIATIVE_POLICIES,
+  AGENT_ROLE_LABELS,
+  parseAgentInitiativeLevel,
+  type AgentInitiativeLevel,
+} from "@paperclipai/shared";
 
 /* ---- Help text for (?) tooltips ---- */
 export const help: Record<string, string> = {
@@ -53,7 +59,8 @@ export const help: Record<string, string> = {
   webhookUrl: "The URL that receives POST requests when the agent is invoked.",
   heartbeatInterval: "Run this agent automatically on a timer. Useful for periodic tasks like checking for new work.",
   heartbeatActiveHours: "Only run timed heartbeats between these local times (HH:MM). Leave both empty to run around the clock. Assignments and mentions still wake the agent any time.",
-  heartbeatModel: "Model for timed heartbeats only, e.g. a cheaper model for quick check-ins. Other runs keep the adapter's model.",
+  heartbeatModel: "Model for timed heartbeats and initiative runs, e.g. a cheaper model for quick check-ins. Other runs keep the adapter's model.",
+  initiative: "How much work this agent starts on its own. On its own runs it looks for opportunities in its role (on the web too, if its runtime has web tools), proposes ideas as issues, and starts internal work. Anything external or costly waits for your approval. Initiative runs have their own daily and budget limits and follow the heartbeat active hours.",
   memoryFlush: "Before a long session is compacted, give the agent one last turn to save anything durable with its memory tools.",
   intervalSec: "Seconds between automatic heartbeat invocations.",
   timeoutSec: "Maximum seconds a run can take before being terminated. 0 means no timeout.",
@@ -98,6 +105,53 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
         {hint && <HintIcon text={hint} />}
       </div>
       {children}
+    </div>
+  );
+}
+
+export function InitiativeSlider({
+  value,
+  onChange,
+}: {
+  value: unknown;
+  onChange: (level: AgentInitiativeLevel) => void;
+}) {
+  const level = parseAgentInitiativeLevel(value);
+  const index = AGENT_INITIATIVE_LEVELS.indexOf(level);
+  const policy = AGENT_INITIATIVE_POLICIES[level];
+  return (
+    <div className="space-y-1.5" data-testid="agent-initiative">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Initiative</span>
+          <HintIcon text={help.initiative} />
+        </div>
+        <span className="text-xs font-medium">{policy.label}</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={AGENT_INITIATIVE_LEVELS.length - 1}
+        step={1}
+        value={index}
+        aria-label="Initiative"
+        aria-valuetext={policy.label}
+        onChange={(event) => onChange(AGENT_INITIATIVE_LEVELS[Number(event.target.value)] ?? level)}
+        className="h-1.5 w-full accent-primary"
+      />
+      <div className="flex justify-between text-xs text-muted-foreground">
+        {AGENT_INITIATIVE_LEVELS.map((option) => (
+          <span key={option} className={cn(option === level && "text-foreground")}>
+            {AGENT_INITIATIVE_POLICIES[option].label}
+          </span>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {policy.description}
+        {policy.maxRunsPerDay > 0
+          ? ` Spends at most ${policy.monthlyBudgetSharePercent}% of the agent's monthly budget on these runs, or $${(policy.fallbackDailyCostCents / 100).toFixed(2)} a day without a budget.`
+          : ""}
+      </p>
     </div>
   );
 }
