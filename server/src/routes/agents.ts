@@ -5359,8 +5359,28 @@ export function agentRoutes(
         adapterConfig: patchData.adapterConfig,
       });
     }
-    if (existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
-    const nextAiBinding = aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
+    // A binding inherited from the previous harness (e.g. a Claude connection when
+    // switching to OpenCode on a local model) was never chosen for the new one.
+    // Drop it when incompatible so the run falls back to the adapter's own auth.
+    let droppedInheritedAiBinding = false;
+    const inheritedAiBinding = aiConnectionBindingSchema.safeParse(existing.runtimeConfig.aiConnection).data;
+    const requestedAiConnection = requestedRuntimeConfig?.aiConnection;
+    if (
+      inheritedAiBinding &&
+      requestedAdapterType !== existing.adapterType &&
+      (requestedAiConnection == null || JSON.stringify(requestedAiConnection) === JSON.stringify(existing.runtimeConfig.aiConnection))
+    ) {
+      const aiConfig = (patchData.adapterConfig ?? existing.adapterConfig) as Record<string, unknown>;
+      if (!isAiConnectionCompatible(inheritedAiBinding, requestedAdapterType, aiConfig.model, aiConfig.provider, aiConfig.acpxAgent)) {
+        const { aiConnection: _dropped, ...rest } = requestedRuntimeConfig ?? (existing.runtimeConfig as Record<string, unknown>);
+        requestedRuntimeConfig = rest;
+        droppedInheritedAiBinding = true;
+      }
+    }
+    if (!droppedInheritedAiBinding && existing.runtimeConfig.aiConnection && requestedRuntimeConfig && !requestedRuntimeConfig.aiConnection) requestedRuntimeConfig.aiConnection = existing.runtimeConfig.aiConnection;
+    const nextAiBinding = droppedInheritedAiBinding
+      ? undefined
+      : aiConnectionBindingSchema.safeParse(requestedRuntimeConfig?.aiConnection ?? existing.runtimeConfig.aiConnection).data;
     if (nextAiBinding) {
       await assertCanUpdateAgent(req, existing);
       const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existing.runtimeConfig.aiConnection);
